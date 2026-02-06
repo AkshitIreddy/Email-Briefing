@@ -1,19 +1,19 @@
 # Email Briefing 📰
 
-Email Briefing is a high-end, AI-powered desktop application that transforms your chaotic Gmail inbox into a structured, executive-level daily briefing.
+Email Briefing is a desktop application that summarizes your Gmail inbox into a structured daily briefing.
 
-Powered by **Electron**, **React**, and **Cohere Command R+**, it intelligently filters noise, categorizes insights, and presents them in a beautiful "Glassmorphism" dashboard with immersive background animations.
+Powered by **Electron**, **React**, and **Cohere Command R+**, it filters emails, categorizes them, and presents summaries in a clean dashboard.
 
 ![Email Briefing UI](public/icon.png)
 
 ## ✨ Features
 
-- **Daily Briefing**: Synthesizes 24h of emails (INBOX) into punchy, categorized summaries.
-- **Glassmorphism UI**: Premium Windows 11-style aesthetics with dark mode and vibrant glass cards.
-- **Immersive Backgrounds**: Choose between **Simple**, **Snow ❄️**, or **Nebula 🌌** animations.
-- **Aggressive Filtering**: Automatically strips out ads, promos, and intro fluff.
-- **Sender Intelligence**: Displays sender name and email clearly for context.
-- **Secure Architecture**: OAuth2 tokens and API keys are stored locally.
+- **Daily Briefing**: Summarizes 24h of emails (INBOX) into categorized points.
+- **Clean UI**: Dark mode interface with clear visual hierarchy.
+- **Backgrounds**: Customizable background options (Simple, Snow ❄️, Nebula 🌌).
+- **Filtering**: Removes ads and introductory text to focus on content.
+- **Sender Info**: Displays sender name and email for context.
+- **Secure**: OAuth2 tokens and API keys are stored locally.
 
 ## 🚀 Installation
 
