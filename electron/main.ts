@@ -504,7 +504,7 @@ ipcMain.handle('fetch-briefing', async () => {
                     // Prefer text/plain, but fall back to text/html
                     let plainText = '';
                     let htmlContent = '';
-                    
+
                     for (const part of payload.parts) {
                         if (part.mimeType === 'text/plain' && part.body?.data) {
                             plainText = Buffer.from(part.body.data, 'base64').toString('utf8');
@@ -512,7 +512,7 @@ ipcMain.handle('fetch-briefing', async () => {
                             htmlContent = Buffer.from(part.body.data, 'base64').toString('utf8');
                         }
                     }
-                    
+
                     // Use plain text if available, but ALWAYS clean it in case it has HTML fragments
                     if (plainText) {
                         rawHtmlSize = plainText.length;
@@ -527,10 +527,10 @@ ipcMain.handle('fetch-briefing', async () => {
 
                 if (body) {
                     // ========== AGGRESSIVE POST-PROCESSING ==========
-                    
+
                     // Remove quoted replies (lines starting with >)
                     body = body.split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
-                    
+
                     // Remove zero-width characters and invisible Unicode (common in email spam/tracking)
                     body = body.replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180D\u2060-\u206F\u3164\uFFA0]/g, '');
                     // Remove variation selectors
@@ -542,38 +542,38 @@ ipcMain.handle('fetch-briefing', async () => {
                     body = body.replace(/[\uFE20-\uFE2F]/g, ''); // Combining half marks
                     // Remove control characters (except newlines and tabs)
                     body = body.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-                    
+
                     // Remove URLs (http/https links)
                     body = body.replace(/https?:\/\/[^\s\)\]\}]+/gi, '');
-                    
+
                     // Remove email addresses (except in From field which we track separately)
                     body = body.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '');
-                    
+
                     // Remove common email boilerplate
                     body = body.replace(/Unsubscribe|View in browser|View online|Open in app|Copyright ©|All rights reserved|Privacy Policy|Terms of Service|Terms & Conditions|Manage preferences|Update preferences|Email preferences|Click here|Read more|Learn more|See more|View more|Read online|Sent to:|You received this|This email was sent|If you no longer wish|To unsubscribe|Opt out|Forward to a friend|Add us to your address book|Was this email forwarded|Having trouble viewing|View as webpage/gi, '');
-                    
+
                     // Remove social media mentions
                     body = body.replace(/Follow us on|Like us on|Connect with us|Join us on|Find us on|Twitter|Facebook|Instagram|LinkedIn|YouTube|TikTok/gi, '');
-                    
+
                     // Remove phone numbers
                     body = body.replace(/\+?[\d\s\-\(\)]{10,}/g, '');
-                    
+
                     // Remove markdown image syntax leftovers
                     body = body.replace(/!\[.*?\]\(.*?\)/g, '');
                     body = body.replace(/\[image:.*?\]/gi, '');
                     body = body.replace(/View image:.*$/gm, '');
-                    
+
                     // Remove excessive special characters and formatting
                     body = body.replace(/[\*\#\^\~\`]{2,}/g, '');
                     body = body.replace(/[-=_]{3,}/g, '');
-                    
+
                     // Normalize whitespace
                     body = body.replace(/\t/g, ' ');
                     body = body.replace(/[ ]{2,}/g, ' ');
                     body = body.replace(/\n[ ]+/g, '\n');
                     body = body.replace(/[ ]+\n/g, '\n');
                     body = body.replace(/\n{3,}/g, '\n\n');
-                    
+
                     // Remove lines that are just punctuation or very short (likely formatting)
                     body = body.split('\n').filter(line => {
                         const trimmed = line.trim();
@@ -581,7 +581,7 @@ ipcMain.handle('fetch-briefing', async () => {
                         if (/^[\s\.\,\|\-\*\#\:\;\!\?\&\@\$\%\^\(\)\[\]\{\}\/\\]+$/.test(trimmed)) return false;
                         return true;
                     }).join('\n');
-                    
+
                     body = body.trim();
                     afterRegexCleanSize = body.length;
 
@@ -604,12 +604,12 @@ ipcMain.handle('fetch-briefing', async () => {
 
                     if (body.trim().length > 100) {
                         emails.push({ id: message.id!, subject, from, body });
-                        
+
                         // Clear, detailed logging
                         const htmlJunkRemoved = rawHtmlSize - afterHtmlToTextSize;
                         const regexJunkRemoved = afterHtmlToTextSize - afterRegexCleanSize;
                         const totalJunkRemoved = htmlJunkRemoved + regexJunkRemoved;
-                        
+
                         console.log(`[Email ${emails.length}] "${subject.substring(0, 55)}..."`);
                         console.log(`  ├─ Raw HTML:        ${rawHtmlSize.toLocaleString().padStart(7)} chars`);
                         console.log(`  ├─ After HTML→Text: ${afterHtmlToTextSize.toLocaleString().padStart(7)} chars (removed ${htmlJunkRemoved.toLocaleString()} HTML/CSS/tags)`);
@@ -617,7 +617,7 @@ ipcMain.handle('fetch-briefing', async () => {
                         if (truncatedAmount > 0) {
                             console.log(`  ├─ After Truncate:  ${finalSize.toLocaleString().padStart(7)} chars (cut ${truncatedAmount.toLocaleString()} to fit 15k limit)`);
                         }
-                        console.log(`  └─ FINAL: ${rawHtmlSize.toLocaleString()} → ${finalSize.toLocaleString()} chars (${Math.round((1 - finalSize/rawHtmlSize) * 100)}% total reduction)`);
+                        console.log(`  └─ FINAL: ${rawHtmlSize.toLocaleString()} → ${finalSize.toLocaleString()} chars (${Math.round((1 - finalSize / rawHtmlSize) * 100)}% total reduction)`);
                     }
                 }
             } catch (error) {
@@ -685,25 +685,38 @@ INSTRUCTIONS:
         // Retry configuration
         const MAX_RETRIES = 3;
         const BASE_DELAY_MS = 2000; // 2 seconds base delay
-        
+
         // Dynamic timeout based on API key type
         // Trial keys have slower response times due to rate limiting, need longer timeout
         // Production keys are faster and more reliable
         const cohereKeyType = store.get('cohereKeyType') || 'trial';
         const REQUEST_TIMEOUT_MS = cohereKeyType === 'production' ? 60000 : 90000; // 60s for production, 90s for trial
         console.log(`[AI] Using ${cohereKeyType} timeout: ${REQUEST_TIMEOUT_MS / 1000}s`);
-        
+
         const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
         // Timeout wrapper for API calls
         const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
             return Promise.race([
                 promise,
-                new Promise<T>((_, reject) => 
+                new Promise<T>((_, reject) =>
                     setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
                 )
             ]);
         };
+
+        const normalizeBlock = (block: any): any => ({
+            category: block.category || 'General',
+            icon: block.icon || '💡',
+            headline: block.headline || block.title || 'Update',
+            bullet_points: Array.isArray(block.bullet_points) ? block.bullet_points : ['Details unavailable'],
+            detailed_points: Array.isArray(block.detailed_points) ? block.detailed_points : [],
+            sentiment: block.sentiment || 'Neutral',
+            isSponsored: block.isSponsored === true,
+            sourceEmailSubject: block.sourceEmailSubject || '',
+            senderName: block.senderName || '',
+            senderEmail: block.senderEmail || ''
+        });
 
         const summarizeEmail = async (email: EmailData, emailIndex: number): Promise<any> => {
             const userPrompt = `EMAIL SUBJECT: ${email.subject}\nFROM: ${email.from}\n\nCONTENT:\n${email.body}`;
@@ -719,13 +732,13 @@ INSTRUCTIONS:
             for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
                 const attemptLabel = attempt > 1 ? ` (Retry ${attempt}/${MAX_RETRIES})` : '';
                 console.log(`[AI] Sending request to Cohere API...${attemptLabel}`);
-                
+
                 // On retry, log first 200 chars to help debug problematic content
                 if (attempt > 1) {
                     const contentPreview = email.body.substring(0, 200).replace(/\n/g, ' ').trim();
                     console.log(`[AI] Content preview (first 200 chars): "${contentPreview}..."`);
                 }
-                
+
                 const startTime = Date.now();
 
                 try {
@@ -755,7 +768,7 @@ INSTRUCTIONS:
 
                     let cleanJson = response.content.toString();
                     console.log(`[AI] Raw response length: ${cleanJson.length} chars`);
-                    
+
                     cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
                     const parsed = JSON.parse(cleanJson);
 
@@ -776,14 +789,19 @@ INSTRUCTIONS:
                         parsed.senderEmail = email.from;
                     }
 
-                    return parsed;
+                    // ========== STREAMING CHANGE: Emit card immediately ==========
+                    const normalized = normalizeBlock(parsed);
+                    mainWindow?.webContents.send('briefing-card-generated', normalized);
+                    // ==========================================================
+
+                    return normalized;
 
                 } catch (error: any) {
                     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
                     const errorMessage = error?.message || String(error);
                     const errorLower = errorMessage.toLowerCase();
                     const httpStatus = error?.response?.status;
-                    
+
                     // Determine if error is retryable
                     const isRateLimited = httpStatus === 429 || errorMessage.includes('429') || errorLower.includes('rate limit');
                     const isServerError = httpStatus >= 500 && httpStatus < 600;
@@ -825,7 +843,7 @@ INSTRUCTIONS:
                         percent: Math.round((processedCount / totalEmails) * 100)
                     });
 
-                    return {
+                    const errorBlock = {
                         category: 'General',
                         icon: '📧',
                         headline: email.subject,
@@ -837,11 +855,16 @@ INSTRUCTIONS:
                         senderName: email.from,
                         senderEmail: email.from
                     };
+
+                    const normalized = normalizeBlock(errorBlock);
+                    mainWindow?.webContents.send('briefing-card-generated', normalized);
+
+                    return normalized;
                 }
             }
 
             // Should never reach here, but TypeScript needs it
-            return {
+            const fallback = normalizeBlock({
                 category: 'General',
                 icon: '📧',
                 headline: email.subject,
@@ -850,7 +873,9 @@ INSTRUCTIONS:
                 sentiment: 'Neutral',
                 isSponsored: false,
                 sourceEmailSubject: email.subject
-            };
+            });
+            mainWindow?.webContents.send('briefing-card-generated', fallback);
+            return fallback;
         };
 
         const start = Date.now();
@@ -865,19 +890,8 @@ INSTRUCTIONS:
 
         console.log(`[AI] Completed ${summaryBlocks.length} summaries in ${(Date.now() - start) / 1000}s`);
 
-        // Normalize blocks
-        const normalizedBlocks = summaryBlocks.map((block: any) => ({
-            category: block.category || 'General',
-            icon: block.icon || '💡',
-            headline: block.headline || block.title || 'Update',
-            bullet_points: Array.isArray(block.bullet_points) ? block.bullet_points : ['Details unavailable'],
-            detailed_points: Array.isArray(block.detailed_points) ? block.detailed_points : [],
-            sentiment: block.sentiment || 'Neutral',
-            isSponsored: block.isSponsored === true,
-            sourceEmailSubject: block.sourceEmailSubject || '',
-            senderName: block.senderName || '',
-            senderEmail: block.senderEmail || ''
-        }));
+        // Blocks are already normalized in summarizeEmail
+        const normalizedBlocks = summaryBlocks;
 
         const briefingData: Briefing = {
             title: `Daily Briefing - ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,

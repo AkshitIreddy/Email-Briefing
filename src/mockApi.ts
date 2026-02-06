@@ -77,5 +77,59 @@ export const mockBriefingAPI: BriefingAPI = {
     openExternal: async (url: string) => {
         console.log('[MOCK] Opening external URL:', url);
         window.open(url, '_blank');
+    },
+
+    // Missing methods implementation
+    getHistory: async () => {
+        console.log('[MOCK] Getting history...');
+        return [];
+    },
+    clearHistory: async () => {
+        console.log('[MOCK] Clearing history...');
+    },
+    getSettings: async () => {
+        return {
+            accentColor: '#06b6d4',
+            fontSize: 100,
+            animationsEnabled: true,
+            backgroundMode: 'simple'
+        };
+    },
+    setSettings: async (settings) => {
+        console.log('[MOCK] Setting settings:', settings);
+    },
+    getCohereKeyType: async () => 'trial',
+    setCohereKeyType: async (type) => { console.log('Set key type:', type); },
+
+    onProgress: (callback) => {
+        // Simulate progress
+        let count = 0;
+        const total = 10;
+        const interval = setInterval(() => {
+            count++;
+            callback({ current: count, total, percent: Math.round((count / total) * 100) });
+            if (count >= total) clearInterval(interval);
+        }, 500);
+        return () => clearInterval(interval);
+    },
+
+    onCardGenerated: (callback) => {
+        // Simulate streaming cards
+        let count = 0;
+        const interval = setInterval(() => {
+            if (count >= 3) {
+                clearInterval(interval);
+                return;
+            }
+            callback({
+                category: "Tech",
+                icon: "💻",
+                headline: `Mock Streamed Card ${count + 1}`,
+                bullet_points: ["Streamed point 1", "Streamed point 2"],
+                sentiment: "Good"
+            });
+            count++;
+        }, 800);
+        return () => clearInterval(interval);
     }
 };

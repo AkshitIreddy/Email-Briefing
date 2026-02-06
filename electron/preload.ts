@@ -36,5 +36,12 @@ contextBridge.exposeInMainWorld('briefingAPI', {
         ipcRenderer.on('briefing-progress', subscription);
         // Return unsubscribe function
         return () => ipcRenderer.removeListener('briefing-progress', subscription);
+    },
+
+    // Card Generated Listener
+    onCardGenerated: (callback: (card: any) => void) => {
+        const subscription = (_: any, card: any) => callback(card);
+        ipcRenderer.on('briefing-card-generated', subscription);
+        return () => ipcRenderer.removeListener('briefing-card-generated', subscription);
     }
 });

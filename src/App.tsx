@@ -150,19 +150,46 @@ function App() {
         setProgress(null);
         setLoadingMessage(LOADING_MESSAGES[0]);
 
-        // Subscribe to progress
-        let unsubscribe: (() => void) | undefined;
+        // Streaming state initialization
+        const initialBriefing: Briefing = {
+            title: `Daily Briefing - ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,
+            summary_blocks: []
+        };
+        setBriefing(initialBriefing);
+        setEmailCount(0); // Will update at the end
+
+        // Subscribe to progress and card events
+        let unsubscribeProgress: (() => void) | undefined;
+        let unsubscribeCards: (() => void) | undefined;
+
         try {
             const api = getAPI();
+
             if (api.onProgress) {
-                unsubscribe = api.onProgress((data) => {
+                unsubscribeProgress = api.onProgress((data) => {
                     setProgress(data);
+                });
+            }
+
+            if (api.onCardGenerated) {
+                unsubscribeCards = api.onCardGenerated((card) => {
+                    setBriefing(prev => {
+                        if (!prev) return { ...initialBriefing, summary_blocks: [card] };
+                        return {
+                            ...prev,
+                            summary_blocks: [...prev.summary_blocks, card]
+                        };
+                    });
+
+                    // Switch to result screen as soon as we have the first card
+                    setScreen('result');
                 });
             }
 
             const result = await api.fetchBriefing();
 
             if (result.success && result.data) {
+                // Final update to ensure consistency and correct count
                 setBriefing(result.data);
                 setEmailCount(result.emailCount || 0);
                 setScreen('result');
@@ -174,7 +201,8 @@ function App() {
             setError(err.message || 'An unexpected error occurred');
             setScreen('error');
         } finally {
-            if (unsubscribe) unsubscribe();
+            if (unsubscribeProgress) unsubscribeProgress();
+            if (unsubscribeCards) unsubscribeCards();
         }
     }, []);
 
@@ -293,7 +321,14 @@ function App() {
                         <div className="results-header">
                             <h1 className="briefing-title">{briefing.title}</h1>
                             <p className="briefing-meta">
-                                Synthesized from {emailCount} email{emailCount !== 1 ? 's' : ''}
+                                {progress && progress.percent < 100 ? (
+                                    <span style={{ color: 'var(--accent-primary)', fontWeight: 'bold' }}>
+                                        {/* Spinner could be added here if desired */}
+                                        Processing... {progress.percent}% ({progress.current}/{progress.total})
+                                    </span>
+                                ) : (
+                                    <span>Synthesized from {emailCount} email{emailCount !== 1 ? 's' : ''}</span>
+                                )}
                             </p>
                             <button className="reset-btn" onClick={handleReset}>
                                 ← New Brief
@@ -389,9 +424,9 @@ function App() {
                                         {selectedBlock.detailed_points.map((point, i) => {
                                             // Handle both legacy string format and new object format
                                             const isObject = typeof point === 'object' && point !== null;
-                                            const text = isObject ? (point as {text: string}).text : point as string;
-                                            const isSponsored = isObject ? (point as {isSponsored?: boolean}).isSponsored : false;
-                                            
+                                            const text = isObject ? (point as { text: string }).text : point as string;
+                                            const isSponsored = isObject ? (point as { isSponsored?: boolean }).isSponsored : false;
+
                                             return (
                                                 <li key={i} className={isSponsored ? 'sponsored-point' : ''}>
                                                     {isSponsored && <span className="point-sponsored-badge">📢 Ad</span>}
@@ -481,7 +516,7 @@ function App() {
                                 </button>
                             </div>
                             <p className="form-hint key-type-hint">
-                                {cohereKeyType === 'trial' 
+                                {cohereKeyType === 'trial'
                                     ? 'Using 90s timeout for trial API (slower due to rate limits)'
                                     : 'Using 60s timeout for production API (faster responses)'}
                             </p>
@@ -663,18 +698,18 @@ function App() {
                         <div className="confirm-icon">🗑️</div>
                         <h2 className="confirm-title">Clear All History?</h2>
                         <p className="confirm-message">
-                            This will permanently delete all {history.length} saved briefing{history.length !== 1 ? 's' : ''}. 
+                            This will permanently delete all {history.length} saved briefing{history.length !== 1 ? 's' : ''}.
                             This action cannot be undone.
                         </p>
                         <div className="confirm-actions">
-                            <button 
-                                className="btn-secondary" 
+                            <button
+                                className="btn-secondary"
                                 onClick={() => setShowClearConfirm(false)}
                             >
                                 Cancel
                             </button>
-                            <button 
-                                className="btn-danger" 
+                            <button
+                                className="btn-danger"
                                 onClick={async () => {
                                     await getAPI().clearHistory();
                                     setHistory([]);

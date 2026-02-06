@@ -90,6 +90,7 @@ export interface BriefingAPI {
     setCohereKeyType: (keyType: CohereKeyType) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
     onProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => () => void;
+    onCardGenerated: (callback: (card: SummaryBlock) => void) => () => void;
 }
 
 declare global {
