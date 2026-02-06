@@ -21,22 +21,42 @@ Powered by **Electron**, **React**, and **Cohere Command R+**, it filters emails
 2.  Run the installer / developer setup to safeguard your API keys (Public Safe Mode).
 
 ## ⚙️ Configuration (Public Safe Mode)
+This application is distributed in "Public Safe" mode. You must configure it **before** using it.
 
-This application is distributed in "Public Safe" mode. You must configure it on first launch:
+### 1. Google OAuth (Required for Email Access)
+**Do this FIRST:** The app needs a `credentials.json` file to identify itself to Google.
 
-### 1. Cohere API Key (AI)
-- Go to [Cohere Dashboard](https://dashboard.cohere.com/api-keys) and generate a **Trial API Key** (Free with generous limits).
-- Open Email Briefing → Click **Settings** (Gear Icon).
-- Paste your key into the "Cohere API Key" field and click **Save**.
+#### How to generate `credentials.json` (Free):
+1.  Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2.  **Create a New Project** (e.g., named "Email Briefing").
+3.  **Enable Gmail API**:
+    *   Go to **APIs & Services > Library**.
+    *   Search for "Gmail API" and click **Enable**.
+4.  **Configure Consent Screen**:
+    *   Go to **APIs & Services > OAuth consent screen**.
+    *   Select **External** -> Create.
+    *   Fill in App Name ("Email Briefing") and emails.
+    *   **Test Users**: Click "Add Users" and enter your own Gmail address. (Crucial for free usage).
+5.  **Create Credentials**:
+    *   Go to **APIs & Services > Credentials**.
+    *   Click **+ CREATE CREDENTIALS** > **OAuth client ID**.
+    *   Application type: **Desktop app**.
+    *   Click **Create**.
+6.  **Download**:
+    *   Download the JSON file.
+    *   **Rename** it to `credentials.json`.
 
-### 2. Google OAuth (Email Access)
-*Note: This is free for personal use in "Testing" mode.*
-- Obtain a `credentials.json` for a Desktop App from Google Cloud Console (Gmail API enabled).
-- Place this file in the application's user data folder:
-  - **Windows:** `%APPDATA%\Email Briefing\credentials.json`
+#### Where to place it:
+1.  Run the app once to create the necessary folders, then close it.
+2.  Press `Win + R` on your keyboard.
+3.  Paste: `%APPDATA%\email-briefing` and hit Enter.
+4.  Paste your `credentials.json` file into this folder.
 
-### 3. Google Cloud Test Users
-**Important:** For personal use (Free), keep your Google Cloud project in "Testing" mode and add your email address as a **Test User** in the OAuth consent screen.
+### 2. Cohere API Key (AI)
+1.  Go to [Cohere Dashboard](https://dashboard.cohere.com/api-keys) and generate a **Trial API Key** (Free).
+2.  Open Email Briefing App.
+3.  Click **Settings** (Gear Icon).
+4.  Paste your key into the "Cohere API Key" field and click **Save**.
 
 ## 🛠️ Development
 

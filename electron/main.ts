@@ -106,6 +106,12 @@ app.whenReady().then(() => {
         });
     });
 
+    // Ensure userData directory exists for credentials.json
+    const userDataPath = app.getPath('userData');
+    if (!fs.existsSync(userDataPath)) {
+        fs.mkdirSync(userDataPath, { recursive: true });
+    }
+
     initializeOAuth();
     createWindow();
 
