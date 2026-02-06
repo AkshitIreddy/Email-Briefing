@@ -4,7 +4,7 @@ Email Briefing is a high-end, AI-powered desktop application that transforms you
 
 Powered by **Electron**, **React**, and **Cohere Command R+**, it intelligently filters noise, categorizes insights, and presents them in a beautiful "Glassmorphism" dashboard with immersive background animations.
 
-![Email Briefing UI](/public\icon.png)
+![Email Briefing UI](public/icon.png)
 
 ## ✨ Features
 
