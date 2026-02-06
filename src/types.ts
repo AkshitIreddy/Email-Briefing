@@ -68,6 +68,7 @@ export interface BriefingAPI {
     getSettings: () => Promise<AccessibilitySettings>;
     setSettings: (settings: AccessibilitySettings) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    onProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => () => void;
 }
 
 declare global {

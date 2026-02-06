@@ -25,4 +25,12 @@ contextBridge.exposeInMainWorld('briefingAPI', {
 
     // Utilities
     openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+
+    // Progress Listener
+    onProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => {
+        const subscription = (_: any, data: any) => callback(data);
+        ipcRenderer.on('briefing-progress', subscription);
+        // Return unsubscribe function
+        return () => ipcRenderer.removeListener('briefing-progress', subscription);
+    }
 });

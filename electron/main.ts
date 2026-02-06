@@ -483,6 +483,10 @@ ipcMain.handle('fetch-briefing', async () => {
         // Concurrency limiter: 5 parallel requests (safe margin for 20 RPM limit)
         const limit = pLimit(5);
 
+        // Progress Tracking
+        let processedCount = 0;
+        const totalEmails = emails.length;
+
         const perEmailSystemPrompt = `You are a PROFESSIONAL executive briefing assistant. 
 Your goal is to summarize the provided email into structured JSON.
 
@@ -518,6 +522,17 @@ INSTRUCTIONS:
                     new SystemMessage(perEmailSystemPrompt),
                     new HumanMessage(userPrompt),
                 ]);
+
+                // Update progress
+                processedCount++;
+                const percent = Math.round((processedCount / totalEmails) * 100);
+
+                // Emit progress event to renderer
+                mainWindow?.webContents.send('briefing-progress', {
+                    current: processedCount,
+                    total: totalEmails,
+                    percent: percent
+                });
 
                 let cleanJson = response.content.toString();
                 cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();

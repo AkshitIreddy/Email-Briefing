@@ -38,6 +38,7 @@ function App() {
     const [showHistory, setShowHistory] = useState(false);
     const [history, setHistory] = useState<HistoryEntry[]>([]);
     const [showAccessibility, setShowAccessibility] = useState(false);
+    const [progress, setProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
     const [accessSettings, setAccessSettings] = useState<AccessibilitySettings>({
         accentColor: '#06b6d4',
         fontSize: 100,
@@ -126,10 +127,20 @@ function App() {
     const handleFetchBriefing = useCallback(async () => {
         setScreen('loading');
         setError(null);
+        setProgress(null);
         setLoadingMessage(LOADING_MESSAGES[0]);
 
+        // Subscribe to progress
+        let unsubscribe: (() => void) | undefined;
         try {
-            const result = await getAPI().fetchBriefing();
+            const api = getAPI();
+            if (api.onProgress) {
+                unsubscribe = api.onProgress((data) => {
+                    setProgress(data);
+                });
+            }
+
+            const result = await api.fetchBriefing();
 
             if (result.success && result.data) {
                 setBriefing(result.data);
@@ -142,6 +153,8 @@ function App() {
         } catch (err: any) {
             setError(err.message || 'An unexpected error occurred');
             setScreen('error');
+        } finally {
+            if (unsubscribe) unsubscribe();
         }
     }, []);
 
@@ -160,6 +173,7 @@ function App() {
         setError(null);
         setSelectedBlock(null);
         setShowHistory(false);
+        setProgress(null);
     };
 
     const loadHistory = async () => {
@@ -243,7 +257,13 @@ function App() {
                     <div className="loading-screen">
                         <div className="loading-spinner" />
                         <p className="loading-message">{loadingMessage}</p>
-                        <p className="loading-count">This may take a minute...</p>
+                        {progress ? (
+                            <p className="loading-count">
+                                Processing {progress.current} of {progress.total} emails ({progress.percent}%)
+                            </p>
+                        ) : (
+                            <p className="loading-count">Initializing pipeline...</p>
+                        )}
                     </div>
                 )}
 
