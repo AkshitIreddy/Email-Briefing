@@ -25,18 +25,18 @@ Powered by **Electron**, **React**, and **Cohere Command R+**, it filters emails
 This application is distributed in "Public Safe" mode. You must configure it on first launch:
 
 ### 1. Cohere API Key (AI)
-- Go to [Cohere Dashboard](https://dashboard.cohere.com/api-keys) and generate a Production key.
+- Go to [Cohere Dashboard](https://dashboard.cohere.com/api-keys) and generate a **Trial API Key** (Free with generous limits).
 - Open Email Briefing → Click **Settings** (Gear Icon).
 - Paste your key into the "Cohere API Key" field and click **Save**.
 
 ### 2. Google OAuth (Email Access)
-*Note: The app requires a `credentials.json` file to identify itself to Google.*
+*Note: This is free for personal use in "Testing" mode.*
 - Obtain a `credentials.json` for a Desktop App from Google Cloud Console (Gmail API enabled).
 - Place this file in the application's user data folder:
   - **Windows:** `%APPDATA%\Email Briefing\credentials.json`
 
 ### 3. Google Cloud Test Users
-**Important:** If your Google Cloud project is in "Testing" mode, add your email address as a Test User in the Google Cloud Console > OAuth consent screen.
+**Important:** For personal use (Free), keep your Google Cloud project in "Testing" mode and add your email address as a **Test User** in the OAuth consent screen.
 
 ## 🛠️ Development
 

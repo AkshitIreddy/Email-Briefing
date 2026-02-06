@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { google } from 'googleapis';
@@ -36,7 +36,9 @@ const store = new Store<{
         animationsEnabled: boolean;
         backgroundMode: 'simple' | 'snow' | 'nebula';
     };
-}>();
+}>({
+    encryptionKey: 'briefing-os-local-secure-key-v1'
+});
 
 // Gmail OAuth scopes
 const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
@@ -73,6 +75,7 @@ function createWindow() {
             contextIsolation: true,
             preload: path.join(__dirname, 'preload.js'),
             sandbox: true,
+            devTools: !app.isPackaged
         },
     });
 
@@ -93,6 +96,16 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+    // SECURITY: Content Security Policy
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        callback({
+            responseHeaders: {
+                ...details.responseHeaders,
+                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.cohere.ai https://api.cohere.com;"]
+            }
+        });
+    });
+
     initializeOAuth();
     createWindow();
 
@@ -212,7 +225,13 @@ ipcMain.handle('set-api-key', async (_, key: string) => {
 
 // Get Cohere API Key
 ipcMain.handle('get-api-key', async () => {
-    return store.get('cohereApiKey') || process.env.COHERE_API_KEY || null;
+    const key = store.get('cohereApiKey') || process.env.COHERE_API_KEY;
+    if (!key) return null;
+    // Return masked key for UI display (e.g. sk-....1234)
+    if (key.length > 8) {
+        return `${key.substring(0, 3)}...${key.substring(key.length - 4)}`;
+    }
+    return '********';
 });
 
 // Google Sign In
