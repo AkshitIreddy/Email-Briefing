@@ -1,0 +1,64 @@
+{
+  "name": "email-briefing",
+  "version": "1.0.0",
+  "description": "Email Briefing - AI-powered email newsletter summarizer",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build": "npm run build:electron && vite build",
+    "preview": "vite preview",
+    "start": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "dist": "npm run build && electron-builder"
+  },
+  "build": {
+    "appId": "com.emailbriefing.app",
+    "productName": "Email Briefing",
+    "directories": {
+      "output": "dist-installer"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": false
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ]
+  },
+  "dependencies": {
+    "@langchain/cohere": "^0.3.0",
+    "@langchain/core": "^1.1.19",
+    "@tsparticles/react": "^3.0.0",
+    "@tsparticles/shape-emoji": "^3.9.1",
+    "@tsparticles/slim": "^3.9.1",
+    "dotenv": "^16.4.5",
+    "electron-store": "^8.2.0",
+    "googleapis": "^140.0.1",
+    "html-to-text": "^9.0.5",
+    "p-limit": "3.1.0",
+    "tsparticles": "^3.9.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^20.11.30",
+    "@types/react": "^18.2.67",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^28.2.5",
+    "electron-builder": "^26.7.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "typescript": "^5.4.2",
+    "vite": "^5.2.6",
+    "wait-on": "^7.2.0"
+  }
+}
