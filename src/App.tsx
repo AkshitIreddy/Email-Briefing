@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Briefing, AppScreen, SummaryBlock, HistoryEntry, AccessibilitySettings } from './types';
+import { Briefing, AppScreen, SummaryBlock, HistoryEntry, AccessibilitySettings, CohereKeyType } from './types';
 import { ParticlesBackground } from './ParticlesBackground';
 
 // Professional loading messages
@@ -39,6 +39,8 @@ function App() {
     const [history, setHistory] = useState<HistoryEntry[]>([]);
     const [showAccessibility, setShowAccessibility] = useState(false);
     const [progress, setProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
+    const [showClearConfirm, setShowClearConfirm] = useState(false);
+    const [cohereKeyType, setCohereKeyType] = useState<CohereKeyType>('trial');
     const [accessSettings, setAccessSettings] = useState<AccessibilitySettings>({
         accentColor: '#06b6d4',
         fontSize: 100,
@@ -84,6 +86,12 @@ function App() {
                 setAccessSettings(settings);
                 applySettings(settings);
             }
+
+            // Load Cohere key type setting
+            if (api.getCohereKeyType) {
+                const keyType = await api.getCohereKeyType();
+                setCohereKeyType(keyType);
+            }
         } catch (err: any) {
             console.error('Failed to check status:', err);
             setError(err.message);
@@ -106,6 +114,18 @@ function App() {
             }
         } catch (err) {
             console.error('Failed to save settings:', err);
+        }
+    };
+
+    const saveCohereKeyType = async (keyType: CohereKeyType) => {
+        setCohereKeyType(keyType);
+        try {
+            const api = getAPI();
+            if (api.setCohereKeyType) {
+                await api.setCohereKeyType(keyType);
+            }
+        } catch (err) {
+            console.error('Failed to save Cohere key type:', err);
         }
     };
 
@@ -366,9 +386,19 @@ function App() {
                                 <>
                                     <h3>Full Details</h3>
                                     <ul className="detail-full-points">
-                                        {selectedBlock.detailed_points.map((point, i) => (
-                                            <li key={i}>{point}</li>
-                                        ))}
+                                        {selectedBlock.detailed_points.map((point, i) => {
+                                            // Handle both legacy string format and new object format
+                                            const isObject = typeof point === 'object' && point !== null;
+                                            const text = isObject ? (point as {text: string}).text : point as string;
+                                            const isSponsored = isObject ? (point as {isSponsored?: boolean}).isSponsored : false;
+                                            
+                                            return (
+                                                <li key={i} className={isSponsored ? 'sponsored-point' : ''}>
+                                                    {isSponsored && <span className="point-sponsored-badge">📢 Ad</span>}
+                                                    {text}
+                                                </li>
+                                            );
+                                        })}
                                     </ul>
                                 </>
                             )}
@@ -430,6 +460,34 @@ function App() {
                         </div>
 
                         <div className="form-group">
+                            <label className="form-label">
+                                API Key Type
+                                <span className="tooltip-trigger" title="Trial keys have slower response times due to rate limiting. Production keys are faster. This setting adjusts the timeout accordingly (90s for trial, 60s for production).">
+                                    ⓘ
+                                </span>
+                            </label>
+                            <div className="key-type-toggle">
+                                <button
+                                    className={`key-type-btn ${cohereKeyType === 'trial' ? 'active' : ''}`}
+                                    onClick={() => saveCohereKeyType('trial')}
+                                >
+                                    🧪 Trial
+                                </button>
+                                <button
+                                    className={`key-type-btn ${cohereKeyType === 'production' ? 'active' : ''}`}
+                                    onClick={() => saveCohereKeyType('production')}
+                                >
+                                    🚀 Production
+                                </button>
+                            </div>
+                            <p className="form-hint key-type-hint">
+                                {cohereKeyType === 'trial' 
+                                    ? 'Using 90s timeout for trial API (slower due to rate limits)'
+                                    : 'Using 60s timeout for production API (faster responses)'}
+                            </p>
+                        </div>
+
+                        <div className="form-group">
                             <label className="form-label">Google Account</label>
                             <div className={`auth-badge ${isAuthenticated ? 'connected' : 'disconnected'}`}>
                                 {isAuthenticated ? '✓ Connected' : '✗ Not connected'}
@@ -479,12 +537,7 @@ function App() {
                                 {history.length > 0 && (
                                     <button
                                         className="clear-history-btn"
-                                        onClick={async () => {
-                                            if (confirm('Are you sure you want to clear all history?')) {
-                                                await getAPI().clearHistory();
-                                                setHistory([]);
-                                            }
-                                        }}
+                                        onClick={() => setShowClearConfirm(true)}
                                     >
                                         🗑️ Clear All
                                     </button>
@@ -598,6 +651,38 @@ function App() {
                                     <span className="slider round"></span>
                                 </label>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Clear History Confirmation Modal */}
+            {showClearConfirm && (
+                <div className="modal-overlay" onClick={() => setShowClearConfirm(false)}>
+                    <div className="modal-content confirm-modal" onClick={e => e.stopPropagation()}>
+                        <div className="confirm-icon">🗑️</div>
+                        <h2 className="confirm-title">Clear All History?</h2>
+                        <p className="confirm-message">
+                            This will permanently delete all {history.length} saved briefing{history.length !== 1 ? 's' : ''}. 
+                            This action cannot be undone.
+                        </p>
+                        <div className="confirm-actions">
+                            <button 
+                                className="btn-secondary" 
+                                onClick={() => setShowClearConfirm(false)}
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                className="btn-danger" 
+                                onClick={async () => {
+                                    await getAPI().clearHistory();
+                                    setHistory([]);
+                                    setShowClearConfirm(false);
+                                }}
+                            >
+                                Delete All
+                            </button>
                         </div>
                     </div>
                 </div>

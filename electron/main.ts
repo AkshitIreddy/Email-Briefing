@@ -85,7 +85,7 @@ function createWindow() {
     // Load the app
     if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
         mainWindow.loadURL('http://localhost:5173');
-        mainWindow.webContents.openDevTools();
+        // DevTools disabled - use View menu or Ctrl+Shift+I if needed
     } else {
         mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
@@ -222,6 +222,17 @@ ipcMain.handle('get-settings', async () => {
 ipcMain.handle('set-settings', async (_, settings: any) => {
     store.set('accessibilitySettings', settings);
     console.log('[Settings] Saved accessibility settings');
+});
+
+// Get Cohere API key type (trial vs production)
+ipcMain.handle('get-cohere-key-type', async () => {
+    return store.get('cohereKeyType') || 'trial'; // Default to trial for safety
+});
+
+// Set Cohere API key type
+ipcMain.handle('set-cohere-key-type', async (_, keyType: 'trial' | 'production') => {
+    store.set('cohereKeyType', keyType);
+    console.log(`[Settings] Cohere key type set to: ${keyType}`);
 });
 
 // Set Cohere API Key
@@ -423,39 +434,190 @@ ipcMain.handle('fetch-briefing', async () => {
                 let body = '';
                 const payload = emailResponse.data.payload;
 
+                // ========== AGGRESSIVE HTML-TO-TEXT CONVERSION ==========
+                // These selectors strip out junk that inflates token counts
+                const htmlToTextOptions = {
+                    wordwrap: false as const,
+                    preserveNewlines: false as const,
+                    selectors: [
+                        // Skip links but keep link text
+                        { selector: 'a', options: { ignoreHref: true } },
+                        // Skip all images (tracking pixels, logos, etc.)
+                        { selector: 'img', format: 'skip' },
+                        // Skip scripts, styles, metadata
+                        { selector: 'script', format: 'skip' },
+                        { selector: 'style', format: 'skip' },
+                        { selector: 'meta', format: 'skip' },
+                        { selector: 'link', format: 'skip' },
+                        { selector: 'noscript', format: 'skip' },
+                        // Skip navigation and layout elements
+                        { selector: 'nav', format: 'skip' },
+                        { selector: 'header', format: 'skip' },
+                        { selector: 'footer', format: 'skip' },
+                        { selector: 'aside', format: 'skip' },
+                        // Skip social media sections
+                        { selector: '[class*="social"]', format: 'skip' },
+                        { selector: '[class*="share"]', format: 'skip' },
+                        { selector: '[class*="footer"]', format: 'skip' },
+                        { selector: '[class*="unsubscribe"]', format: 'skip' },
+                        { selector: '[class*="header"]', format: 'skip' },
+                        { selector: '[class*="nav"]', format: 'skip' },
+                        { selector: '[class*="menu"]', format: 'skip' },
+                        { selector: '[class*="sidebar"]', format: 'skip' },
+                        { selector: '[class*="advertisement"]', format: 'skip' },
+                        { selector: '[class*="promo"]', format: 'skip' },
+                        { selector: '[class*="banner"]', format: 'skip' },
+                        // Skip hidden elements
+                        { selector: '[style*="display:none"]', format: 'skip' },
+                        { selector: '[style*="display: none"]', format: 'skip' },
+                        { selector: '[hidden]', format: 'skip' },
+                        // Skip buttons (usually CTAs)
+                        { selector: 'button', format: 'skip' },
+                    ]
+                };
+
+                // Track sizes at each stage for clear logging
+                let rawHtmlSize = 0;
+                let afterHtmlToTextSize = 0;
+                let afterRegexCleanSize = 0;
+                let finalSize = 0;
+
+                // Helper to detect if content has HTML tags
+                const hasHtmlTags = (content: string): boolean => {
+                    return /<[a-z][\s\S]*>/i.test(content);
+                };
+
+                // Helper to clean content (always run HTML-to-text if HTML detected)
+                const cleanHtml = (content: string): string => {
+                    if (hasHtmlTags(content)) {
+                        return convert(content, htmlToTextOptions);
+                    }
+                    return content;
+                };
+
                 if (payload?.body?.data) {
-                    body = Buffer.from(payload.body.data, 'base64').toString('utf8');
+                    const rawContent = Buffer.from(payload.body.data, 'base64').toString('utf8');
+                    rawHtmlSize = rawContent.length;
+                    body = cleanHtml(rawContent);
+                    afterHtmlToTextSize = body.length;
                 } else if (payload?.parts) {
+                    // Prefer text/plain, but fall back to text/html
+                    let plainText = '';
+                    let htmlContent = '';
+                    
                     for (const part of payload.parts) {
                         if (part.mimeType === 'text/plain' && part.body?.data) {
-                            body = Buffer.from(part.body.data, 'base64').toString('utf8');
-                            break;
+                            plainText = Buffer.from(part.body.data, 'base64').toString('utf8');
                         } else if (part.mimeType === 'text/html' && part.body?.data) {
-                            const html = Buffer.from(part.body.data, 'base64').toString('utf8');
-                            body = convert(html, {
-                                wordwrap: false, selectors: [
-                                    { selector: 'a', options: { ignoreHref: true } },
-                                    { selector: 'img', format: 'skip' },
-                                ]
-                            });
+                            htmlContent = Buffer.from(part.body.data, 'base64').toString('utf8');
                         }
+                    }
+                    
+                    // Use plain text if available, but ALWAYS clean it in case it has HTML fragments
+                    if (plainText) {
+                        rawHtmlSize = plainText.length;
+                        body = cleanHtml(plainText);
+                        afterHtmlToTextSize = body.length;
+                    } else if (htmlContent) {
+                        rawHtmlSize = htmlContent.length;
+                        body = cleanHtml(htmlContent);
+                        afterHtmlToTextSize = body.length;
                     }
                 }
 
                 if (body) {
-                    // Clean content
+                    // ========== AGGRESSIVE POST-PROCESSING ==========
+                    
+                    // Remove quoted replies (lines starting with >)
                     body = body.split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
-                    body = body.replace(/Unsubscribe|View in browser|Copyright ©|All rights reserved/gi, '');
-                    body = body.replace(/\n\s*\n\s*\n/g, '\n\n');
+                    
+                    // Remove zero-width characters and invisible Unicode (common in email spam/tracking)
+                    body = body.replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180D\u2060-\u206F\u3164\uFFA0]/g, '');
+                    // Remove variation selectors
+                    body = body.replace(/[\uFE00-\uFE0F]/g, '');
+                    // Remove other problematic Unicode ranges (emojis modifiers, combining marks, etc.)
+                    body = body.replace(/[\u0300-\u036F]/g, ''); // Combining diacritical marks
+                    body = body.replace(/[\u1AB0-\u1AFF]/g, ''); // Combining diacritical marks extended
+                    body = body.replace(/[\u1DC0-\u1DFF]/g, ''); // Combining diacritical marks supplement
+                    body = body.replace(/[\uFE20-\uFE2F]/g, ''); // Combining half marks
+                    // Remove control characters (except newlines and tabs)
+                    body = body.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+                    
+                    // Remove URLs (http/https links)
+                    body = body.replace(/https?:\/\/[^\s\)\]\}]+/gi, '');
+                    
+                    // Remove email addresses (except in From field which we track separately)
+                    body = body.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '');
+                    
+                    // Remove common email boilerplate
+                    body = body.replace(/Unsubscribe|View in browser|View online|Open in app|Copyright ©|All rights reserved|Privacy Policy|Terms of Service|Terms & Conditions|Manage preferences|Update preferences|Email preferences|Click here|Read more|Learn more|See more|View more|Read online|Sent to:|You received this|This email was sent|If you no longer wish|To unsubscribe|Opt out|Forward to a friend|Add us to your address book|Was this email forwarded|Having trouble viewing|View as webpage/gi, '');
+                    
+                    // Remove social media mentions
+                    body = body.replace(/Follow us on|Like us on|Connect with us|Join us on|Find us on|Twitter|Facebook|Instagram|LinkedIn|YouTube|TikTok/gi, '');
+                    
+                    // Remove phone numbers
+                    body = body.replace(/\+?[\d\s\-\(\)]{10,}/g, '');
+                    
+                    // Remove markdown image syntax leftovers
+                    body = body.replace(/!\[.*?\]\(.*?\)/g, '');
+                    body = body.replace(/\[image:.*?\]/gi, '');
+                    body = body.replace(/View image:.*$/gm, '');
+                    
+                    // Remove excessive special characters and formatting
+                    body = body.replace(/[\*\#\^\~\`]{2,}/g, '');
+                    body = body.replace(/[-=_]{3,}/g, '');
+                    
+                    // Normalize whitespace
+                    body = body.replace(/\t/g, ' ');
+                    body = body.replace(/[ ]{2,}/g, ' ');
+                    body = body.replace(/\n[ ]+/g, '\n');
+                    body = body.replace(/[ ]+\n/g, '\n');
+                    body = body.replace(/\n{3,}/g, '\n\n');
+                    
+                    // Remove lines that are just punctuation or very short (likely formatting)
+                    body = body.split('\n').filter(line => {
+                        const trimmed = line.trim();
+                        if (trimmed.length < 3) return false;
+                        if (/^[\s\.\,\|\-\*\#\:\;\!\?\&\@\$\%\^\(\)\[\]\{\}\/\\]+$/.test(trimmed)) return false;
+                        return true;
+                    }).join('\n');
+                    
+                    body = body.trim();
+                    afterRegexCleanSize = body.length;
 
-                    // Truncate for per-email processing (less aggressive since each email is processed separately)
-                    const TRUNCATE_LIMIT = 6000;
-                    if (body.length > TRUNCATE_LIMIT) {
-                        body = body.substring(0, TRUNCATE_LIMIT) + '... [truncated]';
+                    // ========== SMART TRUNCATION (after cleaning) ==========
+                    const CLEAN_LIMIT = 15000; // 15k chars - generous limit, Cohere has 128k context
+                    let truncatedAmount = 0;
+                    if (body.length > CLEAN_LIMIT) {
+                        // Try to truncate at a sentence boundary
+                        let truncated = body.substring(0, CLEAN_LIMIT);
+                        const lastPeriod = truncated.lastIndexOf('.');
+                        const lastNewline = truncated.lastIndexOf('\n');
+                        const cutPoint = Math.max(lastPeriod, lastNewline, CLEAN_LIMIT - 500);
+                        if (cutPoint > CLEAN_LIMIT - 500) {
+                            truncated = truncated.substring(0, cutPoint + 1);
+                        }
+                        truncatedAmount = body.length - truncated.length;
+                        body = truncated.trim();
                     }
+                    finalSize = body.length;
 
                     if (body.trim().length > 100) {
                         emails.push({ id: message.id!, subject, from, body });
+                        
+                        // Clear, detailed logging
+                        const htmlJunkRemoved = rawHtmlSize - afterHtmlToTextSize;
+                        const regexJunkRemoved = afterHtmlToTextSize - afterRegexCleanSize;
+                        const totalJunkRemoved = htmlJunkRemoved + regexJunkRemoved;
+                        
+                        console.log(`[Email ${emails.length}] "${subject.substring(0, 55)}..."`);
+                        console.log(`  ├─ Raw HTML:        ${rawHtmlSize.toLocaleString().padStart(7)} chars`);
+                        console.log(`  ├─ After HTML→Text: ${afterHtmlToTextSize.toLocaleString().padStart(7)} chars (removed ${htmlJunkRemoved.toLocaleString()} HTML/CSS/tags)`);
+                        console.log(`  ├─ After Regex:     ${afterRegexCleanSize.toLocaleString().padStart(7)} chars (removed ${regexJunkRemoved.toLocaleString()} URLs/boilerplate)`);
+                        if (truncatedAmount > 0) {
+                            console.log(`  ├─ After Truncate:  ${finalSize.toLocaleString().padStart(7)} chars (cut ${truncatedAmount.toLocaleString()} to fit 15k limit)`);
+                        }
+                        console.log(`  └─ FINAL: ${rawHtmlSize.toLocaleString()} → ${finalSize.toLocaleString()} chars (${Math.round((1 - finalSize/rawHtmlSize) * 100)}% total reduction)`);
                     }
                 }
             } catch (error) {
@@ -480,7 +642,9 @@ ipcMain.handle('fetch-briefing', async () => {
             temperature: 0,
         });
 
-        // Concurrency limiter: 5 parallel requests (safe margin for 20 RPM limit)
+        // Concurrency limiter: Process emails with controlled parallelism
+        // Too many parallel requests can cause some to hang/timeout
+        // 5 concurrent requests is a good balance between speed and reliability
         const limit = pLimit(5);
 
         // Progress Tracking
@@ -502,75 +666,201 @@ JSON SCHEMA:
   "icon": "Single emoji representing the category",
   "headline": "Professional one-line headline summarizing the core topic",
   "bullet_points": ["Key insight 1", "Key insight 2", "Key insight 3"],
-  "detailed_points": ["Full organized point 1", "Full organized point 2", ...up to 10 points],
-  "sentiment": "Neutral" | "Good" | "Bad",
-  "isSponsored": true if this email is primarily an advertisement/sponsored content, false otherwise
+  "detailed_points": [
+    {"text": "Full organized point 1", "isSponsored": false},
+    {"text": "Full organized point 2", "isSponsored": false},
+    {"text": "This is a sponsored/ad section", "isSponsored": true},
+    ...up to 10 points
+  ],
+  "sentiment": "Neutral" | "Good" | "Bad"
 }
 
 INSTRUCTIONS:
 1. Extract ALL key information into detailed_points (comprehensive, organized).
-2. Summarize the most important 3-5 items into bullet_points.
-3. Set isSponsored: true ONLY if the email is primarily promotional/advertising.
+2. For EACH detailed_point, set isSponsored: true ONLY if that specific point is promotional/advertising content.
+3. Summarize the most important 3-5 NON-SPONSORED items into bullet_points.
 4. RETURN ONLY VALID JSON. No markdown, no extra text.
 `;
 
-        const summarizeEmail = async (email: EmailData): Promise<any> => {
+        // Retry configuration
+        const MAX_RETRIES = 3;
+        const BASE_DELAY_MS = 2000; // 2 seconds base delay
+        
+        // Dynamic timeout based on API key type
+        // Trial keys have slower response times due to rate limiting, need longer timeout
+        // Production keys are faster and more reliable
+        const cohereKeyType = store.get('cohereKeyType') || 'trial';
+        const REQUEST_TIMEOUT_MS = cohereKeyType === 'production' ? 60000 : 90000; // 60s for production, 90s for trial
+        console.log(`[AI] Using ${cohereKeyType} timeout: ${REQUEST_TIMEOUT_MS / 1000}s`);
+        
+        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+        // Timeout wrapper for API calls
+        const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
+            return Promise.race([
+                promise,
+                new Promise<T>((_, reject) => 
+                    setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+                )
+            ]);
+        };
+
+        const summarizeEmail = async (email: EmailData, emailIndex: number): Promise<any> => {
             const userPrompt = `EMAIL SUBJECT: ${email.subject}\nFROM: ${email.from}\n\nCONTENT:\n${email.body}`;
 
-            try {
-                const response = await model.invoke([
-                    new SystemMessage(perEmailSystemPrompt),
-                    new HumanMessage(userPrompt),
-                ]);
+            console.log(`\n${'='.repeat(60)}`);
+            console.log(`[AI] START Processing Email ${emailIndex + 1}/${totalEmails}`);
+            console.log(`[AI] Subject: "${email.subject}"`);
+            console.log(`[AI] From: ${email.from}`);
+            console.log(`[AI] Body Length: ${email.body.length} characters`);
+            console.log(`[AI] Body Preview: "${email.body.substring(0, 150).replace(/\n/g, ' ')}..."`);
 
-                // Update progress
-                processedCount++;
-                const percent = Math.round((processedCount / totalEmails) * 100);
-
-                // Emit progress event to renderer
-                mainWindow?.webContents.send('briefing-progress', {
-                    current: processedCount,
-                    total: totalEmails,
-                    percent: percent
-                });
-
-                let cleanJson = response.content.toString();
-                cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
-                const parsed = JSON.parse(cleanJson);
-
-                // Add source email info and sender
-                parsed.sourceEmailSubject = email.subject;
-
-                // Parse sender name and email from "Name <email@example.com>" format
-                const senderMatch = email.from.match(/^(.+?)\s*<(.+?)>$/);
-                if (senderMatch) {
-                    parsed.senderName = senderMatch[1].replace(/"/g, '').trim();
-                    parsed.senderEmail = senderMatch[2].trim();
-                } else {
-                    parsed.senderName = email.from;
-                    parsed.senderEmail = email.from;
+            // Retry loop
+            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+                const attemptLabel = attempt > 1 ? ` (Retry ${attempt}/${MAX_RETRIES})` : '';
+                console.log(`[AI] Sending request to Cohere API...${attemptLabel}`);
+                
+                // On retry, log first 200 chars to help debug problematic content
+                if (attempt > 1) {
+                    const contentPreview = email.body.substring(0, 200).replace(/\n/g, ' ').trim();
+                    console.log(`[AI] Content preview (first 200 chars): "${contentPreview}..."`);
                 }
+                
+                const startTime = Date.now();
 
-                return parsed;
-            } catch (error) {
-                console.error(`[AI] Failed to summarize email "${email.subject}":`, error);
-                return {
-                    category: 'General',
-                    icon: '📧',
-                    headline: email.subject,
-                    bullet_points: ['Could not summarize this email.'],
-                    detailed_points: ['Error processing this email content.'],
-                    sentiment: 'Neutral',
-                    isSponsored: false,
-                    sourceEmailSubject: email.subject
-                };
+                try {
+                    // Wrap the API call with a timeout
+                    const response = await withTimeout(
+                        model.invoke([
+                            new SystemMessage(perEmailSystemPrompt),
+                            new HumanMessage(userPrompt),
+                        ]),
+                        REQUEST_TIMEOUT_MS,
+                        `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+                    );
+
+                    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+                    console.log(`[AI] Response received in ${duration}s`);
+
+                    // Update progress
+                    processedCount++;
+                    const percent = Math.round((processedCount / totalEmails) * 100);
+
+                    // Emit progress event to renderer
+                    mainWindow?.webContents.send('briefing-progress', {
+                        current: processedCount,
+                        total: totalEmails,
+                        percent: percent
+                    });
+
+                    let cleanJson = response.content.toString();
+                    console.log(`[AI] Raw response length: ${cleanJson.length} chars`);
+                    
+                    cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
+                    const parsed = JSON.parse(cleanJson);
+
+                    console.log(`[AI] SUCCESS - Category: ${parsed.category}, Headline: "${parsed.headline?.substring(0, 50)}..."`);
+                    console.log(`[AI] END Email ${emailIndex + 1}/${totalEmails} - ${duration}s`);
+                    console.log(`${'='.repeat(60)}\n`);
+
+                    // Add source email info and sender
+                    parsed.sourceEmailSubject = email.subject;
+
+                    // Parse sender name and email from "Name <email@example.com>" format
+                    const senderMatch = email.from.match(/^(.+?)\s*<(.+?)>$/);
+                    if (senderMatch) {
+                        parsed.senderName = senderMatch[1].replace(/"/g, '').trim();
+                        parsed.senderEmail = senderMatch[2].trim();
+                    } else {
+                        parsed.senderName = email.from;
+                        parsed.senderEmail = email.from;
+                    }
+
+                    return parsed;
+
+                } catch (error: any) {
+                    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+                    const errorMessage = error?.message || String(error);
+                    const errorLower = errorMessage.toLowerCase();
+                    const httpStatus = error?.response?.status;
+                    
+                    // Determine if error is retryable
+                    const isRateLimited = httpStatus === 429 || errorMessage.includes('429') || errorLower.includes('rate limit');
+                    const isServerError = httpStatus >= 500 && httpStatus < 600;
+                    // Check for various timeout patterns: "timeout", "timed out", "ETIMEDOUT"
+                    const isTimeout = errorLower.includes('timeout') || errorLower.includes('timed out') || errorMessage.includes('ETIMEDOUT');
+                    const isRetryable = isRateLimited || isServerError || isTimeout;
+
+                    console.log(`[AI] FAILED after ${duration}s (Attempt ${attempt}/${MAX_RETRIES})`);
+                    console.log(`[AI] Error Type: ${error?.constructor?.name || 'Unknown'}`);
+                    console.log(`[AI] Error Message: ${errorMessage}`);
+                    console.log(`[AI] Is Retryable: ${isRetryable} (RateLimit: ${isRateLimited}, ServerError: ${isServerError}, Timeout: ${isTimeout})`);
+                    if (httpStatus) {
+                        console.log(`[AI] HTTP Status: ${httpStatus}`);
+                    }
+                    if (error?.response?.data) {
+                        console.log(`[AI] Response Data: ${JSON.stringify(error.response.data).substring(0, 300)}`);
+                    }
+
+                    // Retry if retryable and not last attempt
+                    if (isRetryable && attempt < MAX_RETRIES) {
+                        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff: 2s, 4s, 8s
+                        const jitter = Math.random() * 1000; // Add 0-1s jitter
+                        const totalDelay = Math.round(delayMs + jitter);
+                        console.log(`[AI] Retrying in ${totalDelay}ms... (${isRateLimited ? 'Rate Limited' : isServerError ? 'Server Error' : 'Timeout'})`);
+                        await sleep(totalDelay);
+                        continue; // Retry
+                    }
+
+                    // Final failure - no more retries
+                    const reason = attempt >= MAX_RETRIES ? 'max retries reached' : 'non-retryable error';
+                    console.log(`[AI] END Email ${emailIndex + 1}/${totalEmails} - FAILED (${reason})`);
+                    console.log(`${'='.repeat(60)}\n`);
+
+                    // Update progress even on failure
+                    processedCount++;
+                    mainWindow?.webContents.send('briefing-progress', {
+                        current: processedCount,
+                        total: totalEmails,
+                        percent: Math.round((processedCount / totalEmails) * 100)
+                    });
+
+                    return {
+                        category: 'General',
+                        icon: '📧',
+                        headline: email.subject,
+                        bullet_points: ['Could not summarize this email.'],
+                        detailed_points: [`Error after ${MAX_RETRIES} attempts: ${errorMessage}`],
+                        sentiment: 'Neutral',
+                        isSponsored: false,
+                        sourceEmailSubject: email.subject,
+                        senderName: email.from,
+                        senderEmail: email.from
+                    };
+                }
             }
+
+            // Should never reach here, but TypeScript needs it
+            return {
+                category: 'General',
+                icon: '📧',
+                headline: email.subject,
+                bullet_points: ['Processing error.'],
+                detailed_points: [],
+                sentiment: 'Neutral',
+                isSponsored: false,
+                sourceEmailSubject: email.subject
+            };
         };
 
         const start = Date.now();
+        console.log(`\n${'#'.repeat(60)}`);
+        console.log(`[Pipeline] Starting AI summarization for ${totalEmails} emails`);
+        console.log(`[Pipeline] Concurrency: 5 parallel requests (balanced for reliability)`);
+        console.log(`${'#'.repeat(60)}\n`);
 
         // Process all emails in parallel with concurrency limit
-        const summaryPromises = emails.map(email => limit(() => summarizeEmail(email)));
+        const summaryPromises = emails.map((email, index) => limit(() => summarizeEmail(email, index)));
         const summaryBlocks = await Promise.all(summaryPromises);
 
         console.log(`[AI] Completed ${summaryBlocks.length} summaries in ${(Date.now() - start) / 1000}s`);

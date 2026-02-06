@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('briefingAPI', {
     setSettings: (settings: { accentColor: string; fontSize: number; animationsEnabled: boolean }) =>
         ipcRenderer.invoke('set-settings', settings),
 
+    // Cohere API Key Type (trial vs production)
+    getCohereKeyType: () => ipcRenderer.invoke('get-cohere-key-type'),
+    setCohereKeyType: (keyType: 'trial' | 'production') => ipcRenderer.invoke('set-cohere-key-type', keyType),
+
     // Utilities
     openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
 
