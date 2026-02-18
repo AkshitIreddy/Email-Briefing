@@ -194,8 +194,14 @@ function App() {
                 setEmailCount(result.emailCount || 0);
                 setScreen('result');
             } else {
-                setError(result.error || 'Failed to fetch briefing');
+                const errorMsg = result.error || 'Failed to fetch briefing';
+                setError(errorMsg);
                 setScreen('error');
+
+                // Auto-logout on session expiry
+                if (errorMsg.toLowerCase().includes('session has expired') || errorMsg.toLowerCase().includes('invalid_grant') || errorMsg.toLowerCase().includes('sign in')) {
+                    setIsAuthenticated(false);
+                }
             }
         } catch (err: any) {
             setError(err.message || 'An unexpected error occurred');

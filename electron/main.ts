@@ -928,9 +928,21 @@ INSTRUCTIONS:
             console.error('API Error Body:', JSON.stringify(error.response.data, null, 2));
         }
 
+        const errorMessage = error.message || String(error);
+
+        // Handle expired/invalid Google tokens
+        if (errorMessage.includes('invalid_grant') || errorMessage.includes('401')) {
+            console.log('[Auth] Detected invalid_grant/401. Clearing tokens.');
+            store.delete('googleTokens');
+            return {
+                success: false,
+                error: 'Your Google session has expired. Please go to Settings and Sign In again.',
+            };
+        }
+
         return {
             success: false,
-            error: error.message || 'An unexpected error occurred.',
+            error: errorMessage || 'An unexpected error occurred.',
         };
     }
 });
