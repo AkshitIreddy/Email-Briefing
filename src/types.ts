@@ -15,13 +15,21 @@ export interface DashboardImage {
     url: string;
     title?: string;
     sourceUrl?: string;
-    provider: 'wikipedia' | 'openverse';
+    provider: 'wikipedia' | 'openverse' | 'commons' | 'scenic';
 }
 
 export interface EmailRef {
     subject: string;
     senderName: string;
     senderEmail: string;
+    emailId?: string;
+}
+
+export interface EmailContent {
+    subject: string;
+    senderName: string;
+    senderEmail: string;
+    body: string;
 }
 
 export interface DashboardStat {
@@ -63,9 +71,18 @@ export interface TopicDashboard {
     generatedAt: string;
 }
 
+export interface Tidbit {
+    text: string;
+    emoji?: string;
+    quote?: string;
+    source?: EmailRef;
+}
+
 export interface DashboardBriefing {
     title: string;
     dashboards: TopicDashboard[];
+    tidbits?: Tidbit[];
+    emailContents?: Record<string, EmailContent>;
 }
 
 // ============================================
@@ -101,6 +118,8 @@ export interface HistoryEntry {
     title?: string;
     emailCount: number;
     dashboards?: TopicDashboard[];
+    tidbits?: Tidbit[];
+    emailContents?: Record<string, EmailContent>;
     briefing?: LegacyBriefing; // legacy entries
 }
 
@@ -155,6 +174,9 @@ export interface BriefingAPI {
     getApiKey: () => Promise<string | null>;
     getHistory: () => Promise<HistoryEntry[]>;
     clearHistory: () => Promise<void>;
+    getLogs?: () => Promise<string>;
+    getBriefingFocus?: () => Promise<{ focus: string; defaultFocus: string }>;
+    setBriefingFocus?: (focus: string) => Promise<void>;
     getSettings: () => Promise<AppSettings>;
     setSettings: (settings: AppSettings) => Promise<void>;
     getCohereKeyType: () => Promise<CohereKeyType>;
@@ -162,6 +184,8 @@ export interface BriefingAPI {
     openExternal: (url: string) => Promise<void>;
     onProgress: (callback: (data: ProgressData) => void) => () => void;
     onDashboardGenerated: (callback: (dashboard: TopicDashboard) => void) => () => void;
+    onTidbits?: (callback: (tidbits: Tidbit[]) => void) => () => void;
+    onEmailContents?: (callback: (contents: Record<string, EmailContent>) => void) => () => void;
 }
 
 declare global {

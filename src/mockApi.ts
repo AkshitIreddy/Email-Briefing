@@ -50,7 +50,7 @@ const mockDashboard = (i: number): TopicDashboard => ({
         { url: 'https://picsum.photos/seed/mock' + i + '/600/400', title: 'Mock image', provider: 'openverse' },
     ],
     emails: [
-        { subject: 'The Download: today in tech', senderName: 'MIT Tech Review', senderEmail: 'newsletter@technologyreview.com' },
+        { subject: 'The Download: today in tech', senderName: 'MIT Tech Review', senderEmail: 'newsletter@technologyreview.com', emailId: 'mock-email-1' },
         { subject: 'Morning Brew ☕', senderName: 'Morning Brew', senderEmail: 'crew@morningbrew.com' },
     ],
     generatedAt: new Date().toISOString(),
@@ -63,6 +63,22 @@ export const mockBriefingAPI: BriefingAPI = {
         const data: DashboardBriefing = {
             title: 'Briefing — Mock Edition',
             dashboards: [0, 1, 2, 3, 4].map(mockDashboard),
+            tidbits: [
+                { text: 'Cursor 2.1 ships a faster tab-completion model.', emoji: '🛠️', quote: 'Cursor today announced version 2.1 with a significantly faster tab-completion model.', source: { subject: 'Newsletter', senderName: 'Mock', senderEmail: 'm@m.com', emailId: 'mock-email-1' } },
+                { text: 'PyTorch 3.0 nightly adds native FP4 kernels.', emoji: '🔥' },
+                { text: 'Raycast is now free for teams under 10 people.', emoji: '🚀' },
+                { text: 'A fourth tidbit to test the expand button.', emoji: '🌸' },
+                { text: 'Fifth tidbit hidden until expanded.', emoji: '🦋' },
+                { text: 'Sixth tidbit also hidden until expanded.', emoji: '🍀' },
+            ],
+            emailContents: {
+                'mock-email-1': {
+                    subject: 'The Download: today in tech',
+                    senderName: 'MIT Tech Review',
+                    senderEmail: 'newsletter@technologyreview.com',
+                    body: 'This is the full cleaned text of the mock email.\n\nIt has multiple paragraphs so the in-app email viewer can be tested properly.\n\nBest,\nThe Mock Newsletter Team',
+                },
+            },
         };
         return { success: true, data, emailCount: 12 };
     },
@@ -83,6 +99,12 @@ export const mockBriefingAPI: BriefingAPI = {
 
     getHistory: async () => [],
     clearHistory: async () => { },
+    getLogs: async () => '[00:00:00.000] [INFO] Mock log line 1\n[00:00:01.000] [INFO] Mock log line 2',
+    getBriefingFocus: async () => ({
+        focus: 'Create topics ONLY for concrete, newsworthy stories...(mock default)',
+        defaultFocus: 'Create topics ONLY for concrete, newsworthy stories...(mock default)',
+    }),
+    setBriefingFocus: async () => { },
 
     getSettings: async () => ({ ...DEFAULT_SETTINGS }),
     setSettings: async () => { },
@@ -114,5 +136,29 @@ export const mockBriefingAPI: BriefingAPI = {
             count++;
         }, 450);
         return () => clearInterval(interval);
+    },
+
+    onTidbits: (callback) => {
+        const timer = setTimeout(() => callback([
+            { text: 'Cursor 2.1 ships a faster tab-completion model.', emoji: '🛠️' },
+            { text: 'PyTorch 3.0 nightly adds native FP4 kernels.', emoji: '🔥' },
+            { text: 'Raycast is now free for teams under 10 people.', emoji: '🚀' },
+            { text: 'A fourth tidbit to test the expand button.', emoji: '🌸' },
+            { text: 'Fifth tidbit hidden until expanded.', emoji: '🦋' },
+            { text: 'Sixth tidbit also hidden until expanded.', emoji: '🍀' },
+        ]), 600);
+        return () => clearTimeout(timer);
+    },
+
+    onEmailContents: (callback) => {
+        const timer = setTimeout(() => callback({
+            'mock-email-1': {
+                subject: 'The Download: today in tech',
+                senderName: 'MIT Tech Review',
+                senderEmail: 'newsletter@technologyreview.com',
+                body: 'This is the full cleaned text of the mock email.\n\nIt has multiple paragraphs so the in-app email viewer can be tested properly.\n\nBest,\nThe Mock Newsletter Team',
+            },
+        }), 400);
+        return () => clearTimeout(timer);
     }
 };

@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     DashboardBriefing, TopicDashboard, AppScreen, HistoryEntry, AppSettings,
     DEFAULT_SETTINGS, CohereKeyType, ProgressData, LegacyBriefing,
-    FontFamilyOption, ContentWidthOption, ThemeOption,
+    FontFamilyOption, ContentWidthOption, ThemeOption, EmailContent,
 } from './types';
 import { ParticlesBackground } from './ParticlesBackground';
-import { DashboardDetail, DashboardCard } from './DashboardView';
+import { DashboardDetail, DashboardCard, Emoji } from './DashboardView';
 import { mockBriefingAPI } from './mockApi';
 
 // ============================================
@@ -94,6 +94,167 @@ const LOADING_STAGES: Record<string, string> = {
     dashboards: '📊 Building dashboards',
 };
 
+const STAGE_HINTS: Record<string, string> = {
+    emails: 'Downloading and cleaning email content',
+    topics: 'Analyzing the full text of every email — on trial API keys this stage can take a few minutes',
+    dashboards: 'Searching the web and generating dashboards — the first one appears as soon as it’s ready',
+};
+
+// Two-tone chime via Web Audio — no asset files needed
+function playChime() {
+    try {
+        const ctx = new AudioContext();
+        [523.25, 783.99].forEach((freq, i) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            const t = ctx.currentTime + i * 0.18;
+            gain.gain.setValueAtTime(0, t);
+            gain.gain.linearRampToValueAtTime(0.3, t + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+            osc.start(t);
+            osc.stop(t + 0.55);
+        });
+        setTimeout(() => ctx.close().catch(() => { }), 1500);
+    } catch { /* audio unavailable — never break the flow */ }
+}
+
+function notifyDashboardsReady(count: number) {
+    playChime();
+    try {
+        new Notification('Your briefing is ready to view ✨', {
+            body: `${count} dashboard${count !== 1 ? 's are' : ' is'} ready — the rest are streaming in.`,
+            silent: true, // we play our own chime
+        });
+    } catch { /* notifications unavailable */ }
+}
+
+// ============================================
+// EMAIL FORMATTER
+// Cleaned newsletter text arrives as single-newline lines with mid-sentence
+// breaks (artifacts of links/bold in the original HTML), "▸"/numbered bullets,
+// and short section headers. Rebuild readable structure from that.
+// ============================================
+
+type EmailBlock = { type: 'heading' | 'bullet' | 'para' | 'meta'; text: string };
+
+const CONNECTOR_END = /(,|:|\b(and|or|the|a|an|to|of|for|with|from|in|on|at|by|that|is|are|was|were|its|it's|about|into|like|your|their|our|as|but|can|will|has|have|new|more|releases|ships|adds|launches|introduces|announces|unveils|gets|brings|makes|offers|supports|hits|reaches|raises|beats|tests))$/i;
+const BULLET_START = /^([▸•‣◦→]|[-*]\s|\d{1,2}\.\s)/;
+const META_LINE = /^(read more|forward|signup|sign up|archive|work with us|follow (us|on)|share|view in browser|presented by|in partnership|sponsored|advertisement|unsubscribe|read time)/i;
+
+function formatEmailBlocks(body: string): EmailBlock[] {
+    const rawLines = body.split('\n').map(l => l.trim()).filter(Boolean);
+
+    // Rejoin sentences that were broken mid-flow by formatting
+    const lines: string[] = [];
+    for (const line of rawLines) {
+        const prev = lines[lines.length - 1];
+        if (prev && !BULLET_START.test(line) && !META_LINE.test(line)) {
+            const startsLower = /^[a-z(,&]/.test(line);
+            const prevUnfinished = !/[.!?:…"”)\]]$/.test(prev);
+            const prevEndsConnector = CONNECTOR_END.test(prev);
+            if ((startsLower && prevUnfinished) || prevEndsConnector) {
+                lines[lines.length - 1] = `${prev} ${line}`.replace(/\s+([,.;:])/g, '$1');
+                continue;
+            }
+        }
+        lines.push(line);
+    }
+
+    return lines.map((line): EmailBlock => {
+        if (META_LINE.test(line) || /^[\d,.]+ (likes|views|upvotes)$/i.test(line)) {
+            return { type: 'meta', text: line };
+        }
+        if (BULLET_START.test(line)) {
+            return { type: 'bullet', text: line.replace(BULLET_START, '').trim() };
+        }
+        const words = line.split(/\s+/).length;
+        if (line.length <= 48 && words <= 7 && !/[.!?,;]$/.test(line)) {
+            return { type: 'heading', text: line };
+        }
+        return { type: 'para', text: line };
+    });
+}
+
+// Some emails arrive/were stored with no newlines at all (one giant line) —
+// break those into readable paragraphs at sentence boundaries.
+function splitLongPara(text: string): string[] {
+    if (text.length <= 500) return [text];
+    const sentences = text.match(/[^.!?]+[.!?]+["”)\]]?\s*|[^.!?]+$/g) || [text];
+    const out: string[] = [];
+    let current = '';
+    for (const s of sentences) {
+        if (current && current.length + s.length > 380) {
+            out.push(current.trim());
+            current = s;
+        } else {
+            current += s;
+        }
+    }
+    if (current.trim()) out.push(current.trim());
+    return out;
+}
+
+const FormattedEmail = ({ body }: { body: string }) => {
+    const blocks = formatEmailBlocks(body);
+    const nodes: React.ReactNode[] = [];
+    let bulletBuffer: string[] = [];
+
+    const flushBullets = (key: number) => {
+        if (!bulletBuffer.length) return;
+        nodes.push(
+            <ul className="email-bullets" key={`ul-${key}`}>
+                {bulletBuffer.map((b, i) => <li key={i}>{b}</li>)}
+            </ul>
+        );
+        bulletBuffer = [];
+    };
+
+    blocks.forEach((block, i) => {
+        if (block.type === 'bullet') {
+            bulletBuffer.push(block.text);
+            return;
+        }
+        flushBullets(i);
+        if (block.type === 'heading') nodes.push(<h4 className="email-h" key={i}>{block.text}</h4>);
+        else if (block.type === 'meta') nodes.push(<div className="email-meta-line" key={i}>{block.text}</div>);
+        else splitLongPara(block.text).forEach((p, j) => nodes.push(<p key={`${i}-${j}`}>{p}</p>));
+    });
+    flushBullets(blocks.length);
+
+    return <>{nodes}</>;
+};
+
+const CopyLogsButton = ({ compact = false }: { compact?: boolean }) => {
+    const [copied, setCopied] = useState(false);
+    const copy = async () => {
+        const logs = (await getAPI().getLogs?.()) || 'No logs available.';
+        try {
+            await navigator.clipboard.writeText(logs);
+        } catch {
+            // Fallback for when the async clipboard API is unavailable/unfocused
+            const ta = document.createElement('textarea');
+            ta.value = logs;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+    };
+    return (
+        <button className={`copy-logs-btn ${compact ? 'compact' : ''}`} onClick={copy} title="Copy this session's logs to the clipboard">
+            {copied ? '✓ Copied!' : '📋 Copy Logs'}
+        </button>
+    );
+};
+
 // ============================================
 // APP
 // ============================================
@@ -116,10 +277,28 @@ function App() {
     const [cohereKeyType, setCohereKeyType] = useState<CohereKeyType>('trial');
     const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
     const [isGenerating, setIsGenerating] = useState(false);
+    const [elapsed, setElapsed] = useState(0);
+    const [emailView, setEmailView] = useState<EmailContent | null>(null);
+    const [focusText, setFocusText] = useState('');
+    const [defaultFocus, setDefaultFocus] = useState('');
+
+    // One live generation at a time: a new Brief Me supersedes the previous
+    // run's listeners and its late promise resolution must not touch the UI
+    const runSeqRef = useRef(0);
+    const activeSubsRef = useRef<Array<() => void>>([]);
 
     useEffect(() => {
         checkStatus();
     }, []);
+
+    // Elapsed-time ticker so long stages visibly aren't frozen
+    useEffect(() => {
+        if (screen !== 'loading') return;
+        setElapsed(0);
+        const started = Date.now();
+        const interval = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+        return () => clearInterval(interval);
+    }, [screen]);
 
     const checkStatus = async () => {
         try {
@@ -141,6 +320,12 @@ function App() {
 
             if (api.getCohereKeyType) {
                 setCohereKeyType(await api.getCohereKeyType());
+            }
+
+            if (api.getBriefingFocus) {
+                const f = await api.getBriefingFocus();
+                setFocusText(f.focus);
+                setDefaultFocus(f.defaultFocus);
             }
         } catch (err: any) {
             console.error('Failed to check status:', err);
@@ -189,6 +374,13 @@ function App() {
     };
 
     const handleFetchBriefing = useCallback(async () => {
+        const myRun = ++runSeqRef.current;
+        const isCurrent = () => myRun === runSeqRef.current;
+
+        // Tear down the previous run's listeners so it can't duplicate events
+        activeSubsRef.current.forEach(u => u());
+        activeSubsRef.current = [];
+
         setScreen('loading');
         setError(null);
         setProgress(null);
@@ -202,26 +394,54 @@ function App() {
         setBriefing(initial);
         setEmailCount(0);
 
-        let unsubProgress: (() => void) | undefined;
-        let unsubDash: (() => void) | undefined;
-
         try {
             const api = getAPI();
 
+            if (api.onTidbits) {
+                activeSubsRef.current.push(api.onTidbits((tidbits) => {
+                    setBriefing(prev => prev ? { ...prev, tidbits } : { ...initial, tidbits });
+                }));
+            }
+
+            if (api.onEmailContents) {
+                activeSubsRef.current.push(api.onEmailContents((contents) => {
+                    setBriefing(prev => prev ? { ...prev, emailContents: contents } : { ...initial, emailContents: contents });
+                }));
+            }
+
+            // Reveal the results grid only once at least half the dashboards
+            // are built (the rest keep streaming in on the grid).
+            let expectedTotal = 0;
+            let received = 0;
+            let revealed = false;
+
             if (api.onProgress) {
-                unsubProgress = api.onProgress(data => setProgress(data));
+                activeSubsRef.current.push(api.onProgress(data => {
+                    if (data.stage === 'dashboards' && data.total > 0) {
+                        expectedTotal = data.total;
+                    }
+                    setProgress(data);
+                }));
             }
 
             if (api.onDashboardGenerated) {
-                unsubDash = api.onDashboardGenerated((dash) => {
+                activeSubsRef.current.push(api.onDashboardGenerated((dash) => {
+                    received++;
                     setBriefing(prev => prev
                         ? { ...prev, dashboards: [...prev.dashboards, dash] }
                         : { ...initial, dashboards: [dash] });
-                    setScreen('result');
-                });
+                    if (!revealed && expectedTotal > 0 && received >= Math.ceil(expectedTotal / 2)) {
+                        revealed = true;
+                        setScreen('result');
+                        notifyDashboardsReady(received);
+                    }
+                }));
             }
 
             const result = await api.fetchBriefing();
+
+            // A newer run owns the UI now — this (stale) resolution must not touch it
+            if (!isCurrent()) return;
 
             if (result.success && result.data) {
                 setBriefing(result.data);
@@ -229,6 +449,7 @@ function App() {
                 setScreen('result');
             } else {
                 const errorMsg = result.error || 'Failed to fetch briefing';
+                if (errorMsg.startsWith('Superseded')) return;
                 setError(errorMsg);
                 setScreen('error');
                 if (errorMsg.toLowerCase().includes('session has expired') || errorMsg.toLowerCase().includes('invalid_grant') || errorMsg.toLowerCase().includes('sign in')) {
@@ -236,22 +457,34 @@ function App() {
                 }
             }
         } catch (err: any) {
+            if (!isCurrent()) return;
             setError(err.message || 'An unexpected error occurred');
             setScreen('error');
         } finally {
-            setIsGenerating(false);
-            if (unsubProgress) unsubProgress();
-            if (unsubDash) unsubDash();
+            if (isCurrent()) {
+                setIsGenerating(false);
+                activeSubsRef.current.forEach(u => u());
+                activeSubsRef.current = [];
+            }
         }
     }, []);
 
     const handleSaveApiKey = async () => {
+        const api = getAPI();
         if (apiKeyInput && !apiKeyInput.includes('...')) {
-            await getAPI().setApiKey(apiKeyInput);
+            await api.setApiKey(apiKeyInput);
             setHasApiKey(true);
+        }
+        if (api.setBriefingFocus) {
+            await api.setBriefingFocus(focusText);
         }
         setShowSettings(false);
         checkStatus();
+    };
+
+    const openEmail = (emailId: string) => {
+        const content = briefing?.emailContents?.[emailId];
+        if (content) setEmailView(content);
     };
 
     const handleReset = () => {
@@ -275,6 +508,8 @@ function App() {
         setBriefing({
             title: entry.title || entry.briefing?.title || 'Saved Briefing',
             dashboards,
+            tidbits: entry.tidbits,
+            emailContents: entry.emailContents,
         });
         setEmailCount(entry.emailCount);
         setSelectedDash(null);
@@ -356,8 +591,17 @@ function App() {
                                     <div className="progress-fill" style={{ width: `${progress.percent}%` }} />
                                 </div>
                                 <p className="loading-count">{progress.message} · {progress.current}/{progress.total}</p>
+                                {STAGE_HINTS[progress.stage] && (
+                                    <p className="loading-hint">{STAGE_HINTS[progress.stage]}</p>
+                                )}
                             </>
                         )}
+                        <p className="loading-elapsed">
+                            {Math.floor(elapsed / 60) > 0 ? `${Math.floor(elapsed / 60)}m ` : ''}{elapsed % 60}s elapsed
+                        </p>
+                        <div className="loading-actions">
+                            <CopyLogsButton />
+                        </div>
                     </div>
                 )}
 
@@ -380,6 +624,34 @@ function App() {
                             </p>
                         </div>
 
+                        {briefing.tidbits && briefing.tidbits.length > 0 && (
+                            <section className="quick-bits">
+                                <div className="quick-bits-header">
+                                    <h3 className="quick-bits-title"><Emoji char="⚡" size={16} /> Quick Bits</h3>
+                                    <span className="quick-bits-count">{briefing.tidbits.length}</span>
+                                </div>
+                                <div className="quick-bits-strip">
+                                    {briefing.tidbits.map((t, i) => (
+                                        <div className="quick-bit-chip" key={i} style={{ animationDelay: `${i * 0.05}s` }}>
+                                            <span className="quick-bit-emoji"><Emoji char={t.emoji || '✨'} size={18} /></span>
+                                            <span>{t.text}</span>
+                                            {(t.quote || t.source) && (
+                                                <div className="app-tooltip qb-tooltip">
+                                                    <div className="app-tooltip-label">Source</div>
+                                                    {t.quote && <div className="app-tooltip-quote">“{t.quote}”</div>}
+                                                    {t.source && (
+                                                        <div className="app-tooltip-sub">
+                                                            {t.source.senderName} · {t.source.subject}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        )}
+
                         <div className="topics-grid">
                             {briefing.dashboards.map((dash, index) => (
                                 <DashboardCard key={dash.id || index} dash={dash} index={index}
@@ -401,6 +673,7 @@ function App() {
                         dash={selectedDash}
                         highlightsEnabled={settings.highlightsEnabled}
                         openExternal={openExternal}
+                        onOpenEmail={openEmail}
                         onBack={() => setSelectedDash(null)}
                     />
                 )}
@@ -414,6 +687,9 @@ function App() {
                         <div className="error-actions">
                             <button className="btn-secondary" onClick={handleReset}>Go Back</button>
                             <button className="btn-primary" onClick={handleFetchBriefing}>Try Again</button>
+                        </div>
+                        <div className="loading-actions">
+                            <CopyLogsButton />
                         </div>
                     </div>
                 )}
@@ -475,6 +751,36 @@ function App() {
                                     Sign Out
                                 </button>
                             )}
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">
+                                Briefing Focus
+                                {focusText.trim() !== defaultFocus.trim() && <span className="custom-badge">customized</span>}
+                            </label>
+                            <textarea
+                                className="form-input focus-textarea"
+                                rows={9}
+                                value={focusText}
+                                onChange={e => setFocusText(e.target.value)}
+                                spellCheck={false}
+                            />
+                            <p className="form-hint">
+                                This text is given verbatim to the AI as the rule for what becomes a dashboard.
+                                Guidelines: describe what TO include and what NOT to include in plain language;
+                                keep the "Do NOT" list — it prevents ads and filler; be concrete
+                                (name the kinds of stories you care about). Saved on Save.
+                            </p>
+                            <button className="btn-secondary btn-small" onClick={() => setFocusText(defaultFocus)}
+                                disabled={focusText.trim() === defaultFocus.trim()}>
+                                Reset to default
+                            </button>
+                        </div>
+
+                        <div className="form-group">
+                            <label className="form-label">Diagnostics</label>
+                            <CopyLogsButton compact />
+                            <p className="form-hint">Copies this session's pipeline logs — useful when reporting a problem.</p>
                         </div>
 
                         <div className="modal-actions">
@@ -641,6 +947,26 @@ function App() {
                                     <span className="slider round"></span>
                                 </label>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Email Viewer Modal — read the source email in-app */}
+            {emailView && (
+                <div className="modal-overlay" onClick={() => setEmailView(null)}>
+                    <div className="modal-content email-viewer reader-surface" onClick={e => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <div className="email-viewer-head">
+                                <h2 className="modal-title"><Emoji char="✉️" size={20} /> {emailView.subject}</h2>
+                                <p className="email-viewer-sender">
+                                    {emailView.senderName} <span>&lt;{emailView.senderEmail}&gt;</span>
+                                </p>
+                            </div>
+                            <button className="modal-close" onClick={() => setEmailView(null)}>×</button>
+                        </div>
+                        <div className="email-viewer-body">
+                            <FormattedEmail body={emailView.body} />
                         </div>
                     </div>
                 </div>

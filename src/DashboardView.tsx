@@ -1,5 +1,35 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { TopicDashboard, DashboardKeyPoint, SearchSource, DashboardImage } from './types';
+
+// ============================================
+// TWEMOJI — crisp, beautiful emoji rendered from the Twemoji CDN,
+// falling back to the native glyph if the image can't load
+// ============================================
+
+export const Emoji = ({ char, size = 20 }: { char: string; size?: number }) => {
+    const [failed, setFailed] = useState(false);
+    const code = useMemo(() => {
+        try {
+            const points = [...char].map(c => c.codePointAt(0)!.toString(16));
+            const filtered = points.length > 1 ? points.filter(p => p !== 'fe0f') : points;
+            return filtered.join('-');
+        } catch {
+            return null;
+        }
+    }, [char]);
+    if (!code || failed) return <span className="emoji-native" style={{ fontSize: size * 0.9 }}>{char}</span>;
+    return (
+        <img
+            className="emoji-img"
+            width={size}
+            height={size}
+            alt={char}
+            draggable={false}
+            src={`https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/svg/${code}.svg`}
+            onError={() => setFailed(true)}
+        />
+    );
+};
 
 // ============================================
 // RICH TEXT — renders ==highlight== and **bold**
@@ -24,6 +54,10 @@ export function richText(text: string, highlightsEnabled: boolean): React.ReactN
     return nodes;
 }
 
+function hostnameOf(url: string, fallback: string): string {
+    try { return new URL(url).hostname.replace('www.', ''); } catch { return fallback; }
+}
+
 // ============================================
 // SHARED SECTIONS
 // ============================================
@@ -32,6 +66,7 @@ interface SectionProps {
     dash: TopicDashboard;
     hl: boolean;
     openExternal: (url: string) => void;
+    onOpenEmail?: (emailId: string) => void;
 }
 
 const SentimentPill = ({ sentiment }: { sentiment: string }) => (
@@ -71,7 +106,7 @@ const KeyPointItem = ({ point, hl }: { point: DashboardKeyPoint; hl: boolean }) 
     </li>
 );
 
-const KeyPoints = ({ dash, hl, title = 'Key Points' }: { dash: TopicDashboard; hl: boolean; title?: string }) => {
+const KeyPoints = ({ dash, hl, title = 'The Story' }: { dash: TopicDashboard; hl: boolean; title?: string }) => {
     if (!dash.content.key_points?.length) return null;
     return (
         <section className="dash-section">
@@ -117,37 +152,6 @@ const Quotes = ({ dash, hl }: { dash: TopicDashboard; hl: boolean }) => {
     );
 };
 
-const ActionItems = ({ dash, hl }: { dash: TopicDashboard; hl: boolean }) => {
-    if (!dash.content.action_items?.length) return null;
-    return (
-        <section className="dash-section action-panel">
-            <h3 className="section-title">Action Items</h3>
-            <ul className="action-list">
-                {dash.content.action_items.map((a, i) => (
-                    <li key={i}><span className="action-check">✓</span>{richText(a, hl)}</li>
-                ))}
-            </ul>
-        </section>
-    );
-};
-
-const Glossary = ({ dash }: { dash: TopicDashboard }) => {
-    if (!dash.content.glossary?.length) return null;
-    return (
-        <section className="dash-section">
-            <h3 className="section-title">Glossary</h3>
-            <dl className="glossary">
-                {dash.content.glossary.map((g, i) => (
-                    <div className="glossary-item" key={i}>
-                        <dt>{g.term}</dt>
-                        <dd>{g.definition}</dd>
-                    </div>
-                ))}
-            </dl>
-        </section>
-    );
-};
-
 const WebContext = ({ dash, hl, openExternal }: SectionProps) => {
     if (!dash.content.web_context?.length) return null;
     return (
@@ -162,7 +166,7 @@ const WebContext = ({ dash, hl, openExternal }: SectionProps) => {
                             <p>{richText(w.text, hl)}</p>
                             {src && (
                                 <button className="source-link" onClick={() => openExternal(src.url)}>
-                                    ↗ {new URL(src.url).hostname.replace('www.', '')}
+                                    ↗ {hostnameOf(src.url, 'source')}
                                 </button>
                             )}
                         </div>
@@ -177,15 +181,26 @@ const FunFact = ({ dash, hl }: { dash: TopicDashboard; hl: boolean }) => {
     if (!dash.content.fun_fact) return null;
     return (
         <div className="fun-fact">
-            <span className="fun-fact-icon">💡</span>
+            <span className="fun-fact-icon"><Emoji char="💡" size={22} /></span>
             <span>{richText(dash.content.fun_fact, hl)}</span>
         </div>
     );
 };
 
-const ImageStrip = ({ images, openExternal, hero = false }: { images: DashboardImage[]; openExternal: (url: string) => void; hero?: boolean }) => {
-    if (!images?.length) return null;
-    const list = hero ? images.slice(1) : images;
+// A full-width image that visually separates blocks of text
+const Breather = ({ img, openExternal }: { img?: DashboardImage; openExternal: (url: string) => void }) => {
+    if (!img) return null;
+    return (
+        <figure className="breather" onClick={() => img.sourceUrl && openExternal(img.sourceUrl)}>
+            <img src={img.url} alt={img.title || ''} loading="lazy"
+                onError={(e) => { (e.currentTarget.closest('figure') as HTMLElement).style.display = 'none'; }} />
+            {img.title && <figcaption>{img.title}</figcaption>}
+        </figure>
+    );
+};
+
+const ImageStrip = ({ images, openExternal, skip = 0 }: { images: DashboardImage[]; openExternal: (url: string) => void; skip?: number }) => {
+    const list = (images || []).slice(skip);
     if (!list.length) return null;
     return (
         <div className="image-strip">
@@ -200,7 +215,7 @@ const ImageStrip = ({ images, openExternal, hero = false }: { images: DashboardI
     );
 };
 
-const SourcesFooter = ({ dash, openExternal }: { dash: TopicDashboard; openExternal: (url: string) => void }) => (
+const SourcesFooter = ({ dash, openExternal, onOpenEmail }: { dash: TopicDashboard; openExternal: (url: string) => void; onOpenEmail?: (emailId: string) => void }) => (
     <footer className="dash-footer">
         {dash.sources.length > 0 && (
             <div className="sources-block">
@@ -209,7 +224,7 @@ const SourcesFooter = ({ dash, openExternal }: { dash: TopicDashboard; openExter
                     {dash.sources.map((s: SearchSource, i) => (
                         <button className="source-chip" key={i} title={s.title} onClick={() => openExternal(s.url)}>
                             <span className="source-num">{i + 1}</span>
-                            {(() => { try { return new URL(s.url).hostname.replace('www.', ''); } catch { return s.title; } })()}
+                            {hostnameOf(s.url, s.title)}
                         </button>
                     ))}
                 </div>
@@ -218,25 +233,64 @@ const SourcesFooter = ({ dash, openExternal }: { dash: TopicDashboard; openExter
         <div className="sources-block">
             <h4>From Your Inbox</h4>
             <div className="email-refs">
-                {dash.emails.map((e, i) => (
-                    <div className="email-ref" key={i}>
-                        <span className="email-ref-subject">{e.subject}</span>
-                        <span className="email-ref-sender">{e.senderName}</span>
-                    </div>
-                ))}
+                {dash.emails.map((e, i) => {
+                    const openable = !!(e.emailId && onOpenEmail);
+                    return (
+                        <div className={`email-ref ${openable ? 'openable' : ''}`} key={i}
+                            title={openable ? 'Read this email in the app' : undefined}
+                            onClick={() => openable && onOpenEmail!(e.emailId!)}>
+                            <span className="email-ref-subject">
+                                <Emoji char="✉️" size={14} /> {e.subject}
+                            </span>
+                            <span className="email-ref-sender">{e.senderName}{openable ? ' →' : ''}</span>
+                        </div>
+                    );
+                })}
             </div>
         </div>
     </footer>
 );
 
 // ============================================
-// TEMPLATE LAYOUTS
+// NORMALIZATION
+// ============================================
+
+export function normalizeDashboard(dash: TopicDashboard): TopicDashboard {
+    const arr = <T,>(v: T[] | undefined | null): T[] => (Array.isArray(v) ? v : []);
+    const c = dash.content || ({} as TopicDashboard['content']);
+    return {
+        ...dash,
+        icon: dash.icon || '📰',
+        category: dash.category || 'General',
+        template: dash.template || 'pulse',
+        content: {
+            headline: c.headline || dash.topic || 'Briefing',
+            overview: c.overview || '',
+            sentiment: c.sentiment === 'Positive' || c.sentiment === 'Negative' ? c.sentiment : 'Neutral',
+            stats: arr(c.stats).filter(s => s && s.value != null && s.label != null),
+            key_points: arr(c.key_points).filter(k => k && k.text),
+            timeline: arr(c.timeline).filter(t => t && t.text),
+            quotes: arr(c.quotes).filter(q => q && q.text),
+            action_items: arr(c.action_items).filter(Boolean),
+            glossary: arr(c.glossary).filter(g => g && g.term),
+            web_context: arr(c.web_context).filter(w => w && w.text),
+            fun_fact: c.fun_fact,
+        },
+        sources: arr(dash.sources).filter(s => s && s.url),
+        images: arr(dash.images).filter(i => i && i.url),
+        emails: arr(dash.emails).filter(e => e && (e.subject || e.senderName)),
+    };
+}
+
+// ============================================
+// TEMPLATE LAYOUTS — single reading flow with images
+// separating blocks of text
 // ============================================
 
 const DashHero = ({ dash, hl }: { dash: TopicDashboard; hl: boolean }) => (
     <div className="dash-hero">
         <div className="dash-hero-meta">
-            <span className="dash-icon">{dash.icon}</span>
+            <span className="dash-icon"><Emoji char={dash.icon} size={26} /></span>
             <span className="dash-category">{dash.category}</span>
             <TemplateBadge template={dash.template} />
             <SentimentPill sentiment={dash.content.sentiment} />
@@ -249,60 +303,38 @@ const DashHero = ({ dash, hl }: { dash: TopicDashboard; hl: boolean }) => (
 const PulseLayout = (p: SectionProps) => (
     <>
         <DashHero dash={p.dash} hl={p.hl} />
+        <Breather img={p.dash.images[0]} openExternal={p.openExternal} />
         <StatTiles dash={p.dash} />
-        <div className="dash-columns">
-            <div className="dash-col-main">
-                <KeyPoints dash={p.dash} hl={p.hl} />
-                <ActionItems dash={p.dash} hl={p.hl} />
-            </div>
-            <div className="dash-col-side">
-                <WebContext {...p} />
-                <ImageStrip images={p.dash.images} openExternal={p.openExternal} />
-            </div>
-        </div>
+        <KeyPoints dash={p.dash} hl={p.hl} />
+        <Breather img={p.dash.images[1]} openExternal={p.openExternal} />
+        <WebContext {...p} />
+        <ImageStrip images={p.dash.images} openExternal={p.openExternal} skip={2} />
     </>
 );
 
-const EditorialLayout = (p: SectionProps) => {
-    const heroImg = p.dash.images[0];
-    return (
-        <>
-            {heroImg && (
-                <div className="editorial-hero-img" onClick={() => heroImg.sourceUrl && p.openExternal(heroImg.sourceUrl)}>
-                    <img src={heroImg.url} alt={heroImg.title || ''}
-                        onError={(e) => { (e.currentTarget.parentElement as HTMLElement).style.display = 'none'; }} />
-                </div>
-            )}
-            <DashHero dash={p.dash} hl={p.hl} />
-            <Quotes dash={p.dash} hl={p.hl} />
-            <div className="dash-columns">
-                <div className="dash-col-main">
-                    <KeyPoints dash={p.dash} hl={p.hl} title="The Story" />
-                    <WebContext {...p} />
-                </div>
-                <div className="dash-col-side">
-                    <Glossary dash={p.dash} />
-                    <StatTiles dash={p.dash} />
-                </div>
-            </div>
-        </>
-    );
-};
+const EditorialLayout = (p: SectionProps) => (
+    <>
+        <Breather img={p.dash.images[0]} openExternal={p.openExternal} />
+        <DashHero dash={p.dash} hl={p.hl} />
+        <Quotes dash={p.dash} hl={p.hl} />
+        <StatTiles dash={p.dash} />
+        <KeyPoints dash={p.dash} hl={p.hl} />
+        <Breather img={p.dash.images[1]} openExternal={p.openExternal} />
+        <WebContext {...p} />
+        <ImageStrip images={p.dash.images} openExternal={p.openExternal} skip={2} />
+    </>
+);
 
 const TimelineLayout = (p: SectionProps) => (
     <>
         <DashHero dash={p.dash} hl={p.hl} />
-        <div className="dash-columns">
-            <div className="dash-col-main">
-                <TimelineSection dash={p.dash} hl={p.hl} />
-            </div>
-            <div className="dash-col-side">
-                <StatTiles dash={p.dash} />
-                <KeyPoints dash={p.dash} hl={p.hl} title="Highlights" />
-                <ImageStrip images={p.dash.images} openExternal={p.openExternal} />
-            </div>
-        </div>
+        <Breather img={p.dash.images[0]} openExternal={p.openExternal} />
+        <StatTiles dash={p.dash} />
+        <TimelineSection dash={p.dash} hl={p.hl} />
+        <Breather img={p.dash.images[1]} openExternal={p.openExternal} />
+        <KeyPoints dash={p.dash} hl={p.hl} title="Highlights" />
         <WebContext {...p} />
+        <ImageStrip images={p.dash.images} openExternal={p.openExternal} skip={2} />
     </>
 );
 
@@ -318,16 +350,11 @@ const SpotlightLayout = (p: SectionProps) => {
                 </div>
             </div>
             <FunFact dash={p.dash} hl={p.hl} />
-            <div className="dash-columns">
-                <div className="dash-col-main">
-                    <KeyPoints dash={p.dash} hl={p.hl} />
-                    <WebContext {...p} />
-                </div>
-                <div className="dash-col-side">
-                    <ActionItems dash={p.dash} hl={p.hl} />
-                    <ImageStrip images={p.dash.images} openExternal={p.openExternal} hero />
-                </div>
-            </div>
+            <KeyPoints dash={p.dash} hl={p.hl} />
+            <Breather img={p.dash.images[1]} openExternal={p.openExternal} />
+            <StatTiles dash={p.dash} />
+            <WebContext {...p} />
+            <ImageStrip images={p.dash.images} openExternal={p.openExternal} skip={2} />
         </>
     );
 };
@@ -335,6 +362,7 @@ const SpotlightLayout = (p: SectionProps) => {
 const MatrixLayout = (p: SectionProps) => (
     <>
         <DashHero dash={p.dash} hl={p.hl} />
+        <Breather img={p.dash.images[0]} openExternal={p.openExternal} />
         <StatTiles dash={p.dash} />
         {p.dash.content.key_points?.length > 0 && (
             <section className="dash-section">
@@ -354,10 +382,9 @@ const MatrixLayout = (p: SectionProps) => (
                 </div>
             </section>
         )}
-        <div className="dash-columns">
-            <div className="dash-col-main"><Glossary dash={p.dash} /></div>
-            <div className="dash-col-side"><ImageStrip images={p.dash.images} openExternal={p.openExternal} /></div>
-        </div>
+        <Breather img={p.dash.images[1]} openExternal={p.openExternal} />
+        <WebContext {...p} />
+        <ImageStrip images={p.dash.images} openExternal={p.openExternal} skip={2} />
     </>
 );
 
@@ -369,11 +396,19 @@ interface DashboardDetailProps {
     dash: TopicDashboard;
     highlightsEnabled: boolean;
     openExternal: (url: string) => void;
+    onOpenEmail?: (emailId: string) => void;
     onBack: () => void;
 }
 
-export const DashboardDetail = ({ dash, highlightsEnabled, openExternal, onBack }: DashboardDetailProps) => {
-    const p: SectionProps = { dash, hl: highlightsEnabled, openExternal };
+export const DashboardDetail = ({ dash: rawDash, highlightsEnabled, openExternal, onOpenEmail, onBack }: DashboardDetailProps) => {
+    const dash = normalizeDashboard(rawDash);
+    const p: SectionProps = { dash, hl: highlightsEnabled, openExternal, onOpenEmail };
+
+    // Always open a dashboard from the top, not wherever the grid was scrolled
+    useEffect(() => {
+        document.querySelector('.main-content')?.scrollTo({ top: 0 });
+    }, [dash.id]);
+
     return (
         <div className={`dashboard-detail dash--${dash.template} reader-surface`}>
             <button className="back-btn" onClick={onBack}>← All Topics</button>
@@ -382,7 +417,7 @@ export const DashboardDetail = ({ dash, highlightsEnabled, openExternal, onBack 
             {dash.template === 'timeline' && <TimelineLayout {...p} />}
             {dash.template === 'spotlight' && <SpotlightLayout {...p} />}
             {dash.template === 'matrix' && <MatrixLayout {...p} />}
-            <SourcesFooter dash={dash} openExternal={openExternal} />
+            <SourcesFooter dash={dash} openExternal={openExternal} onOpenEmail={onOpenEmail} />
         </div>
     );
 };
@@ -391,7 +426,8 @@ export const DashboardDetail = ({ dash, highlightsEnabled, openExternal, onBack 
 // GRID CARD
 // ============================================
 
-export const DashboardCard = ({ dash, index, onClick }: { dash: TopicDashboard; index: number; onClick: () => void }) => {
+export const DashboardCard = ({ dash: rawDash, index, onClick }: { dash: TopicDashboard; index: number; onClick: () => void }) => {
+    const dash = normalizeDashboard(rawDash);
     const img = dash.images[0];
     return (
         <article className="topic-card" style={{ animationDelay: `${index * 0.07}s` }} onClick={onClick}>
@@ -403,7 +439,7 @@ export const DashboardCard = ({ dash, index, onClick }: { dash: TopicDashboard; 
             )}
             <div className="topic-card-body">
                 <div className="topic-card-meta">
-                    <span className="dash-icon">{dash.icon}</span>
+                    <span className="dash-icon"><Emoji char={dash.icon} size={20} /></span>
                     <span className="dash-category">{dash.category}</span>
                     <TemplateBadge template={dash.template} />
                     <SentimentPill sentiment={dash.content.sentiment} />

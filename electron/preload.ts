@@ -18,6 +18,13 @@ contextBridge.exposeInMainWorld('briefingAPI', {
     getHistory: () => ipcRenderer.invoke('get-history'),
     clearHistory: () => ipcRenderer.invoke('clear-history'),
 
+    // Session logs (Copy Logs button)
+    getLogs: () => ipcRenderer.invoke('get-logs'),
+
+    // Briefing focus / philosophy (user-editable prompt block)
+    getBriefingFocus: () => ipcRenderer.invoke('get-briefing-focus'),
+    setBriefingFocus: (focus: string) => ipcRenderer.invoke('set-briefing-focus', focus),
+
     // Appearance / reader settings
     getSettings: () => ipcRenderer.invoke('get-settings'),
     setSettings: (settings: Record<string, unknown>) =>
@@ -42,5 +49,19 @@ contextBridge.exposeInMainWorld('briefingAPI', {
         const subscription = (_: any, dashboard: any) => callback(dashboard);
         ipcRenderer.on('dashboard-generated', subscription);
         return () => ipcRenderer.removeListener('dashboard-generated', subscription);
+    },
+
+    // Tidbits (one-line mentions) listener
+    onTidbits: (callback: (tidbits: any[]) => void) => {
+        const subscription = (_: any, tidbits: any[]) => callback(tidbits);
+        ipcRenderer.on('tidbits-generated', subscription);
+        return () => ipcRenderer.removeListener('tidbits-generated', subscription);
+    },
+
+    // Email contents (for in-app source reading)
+    onEmailContents: (callback: (contents: Record<string, any>) => void) => {
+        const subscription = (_: any, contents: Record<string, any>) => callback(contents);
+        ipcRenderer.on('email-contents', subscription);
+        return () => ipcRenderer.removeListener('email-contents', subscription);
     }
 });

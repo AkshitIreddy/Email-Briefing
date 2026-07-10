@@ -13,7 +13,17 @@ export const TopicPlanSchema = z.object({
         email_indexes: z.array(z.number()),
         search_queries: z.array(z.string()).min(1).max(3),
         image_query: z.string(),
+        importance: z.number().min(1).max(10).optional().default(5),
     })).min(1),
+    // Emails that are pure ads or pure non-news content — excluded from dashboards
+    skip_email_indexes: z.array(z.number()).optional().default([]),
+    // One-line mentions too small for a dashboard (a handy tool, a quick fact)
+    tidbits: z.array(z.object({
+        text: z.string(),
+        emoji: z.string().optional(),
+        source_line: z.string().optional(),
+        email_index: z.number().optional(),
+    })).optional().default([]),
 });
 
 export type TopicPlan = z.infer<typeof TopicPlanSchema>;
@@ -73,13 +83,21 @@ export interface DashboardImage {
     url: string;
     title?: string;
     sourceUrl?: string;
-    provider: 'wikipedia' | 'openverse';
+    provider: 'wikipedia' | 'openverse' | 'commons' | 'scenic';
 }
 
 export interface EmailRef {
     subject: string;
     senderName: string;
     senderEmail: string;
+    emailId?: string;
+}
+
+export interface EmailContent {
+    subject: string;
+    senderName: string;
+    senderEmail: string;
+    body: string;
 }
 
 export interface TopicDashboard {
@@ -95,9 +113,18 @@ export interface TopicDashboard {
     generatedAt: string;
 }
 
+export interface Tidbit {
+    text: string;
+    emoji?: string;
+    quote?: string;
+    source?: EmailRef;
+}
+
 export interface DashboardBriefing {
     title: string;
     dashboards: TopicDashboard[];
+    tidbits?: Tidbit[];
+    emailContents?: Record<string, EmailContent>;
 }
 
 // ============================================

@@ -564,6 +564,51 @@ body {
   color: var(--text-muted);
 }
 
+.loading-hint {
+  margin-top: var(--space-sm);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 380px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.5;
+}
+
+.loading-elapsed {
+  margin-top: var(--space-md);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-primary);
+  opacity: 0.85;
+}
+
+.loading-actions {
+  margin-top: var(--space-lg);
+  display: flex;
+  justify-content: center;
+}
+
+.copy-logs-btn {
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  color: var(--text-secondary);
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.copy-logs-btn:hover {
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+}
+
+.copy-logs-btn.compact {
+  padding: 6px 14px;
+}
+
 /* ---------- RESULTS GRID ---------- */
 
 .results-screen {
@@ -605,6 +650,192 @@ body {
   background: var(--accent-primary);
   box-shadow: 0 0 10px var(--accent-glow);
   animation: corePulse 1.4s ease-in-out infinite;
+}
+
+/* Quick Bits — one-line tidbits too small for a dashboard */
+.quick-bits {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(16px);
+  transition: border-color 0.25s;
+}
+
+.quick-bits:hover {
+  border-color: var(--accent-border);
+}
+
+.quick-bits-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  cursor: pointer;
+  margin-bottom: var(--space-sm);
+}
+
+.quick-bits-title {
+  font-family: 'Space Grotesk', 'Inter', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-bits-count {
+  font-size: 0.7rem;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent-primary);
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+
+/* Tidbits: three-column bullet grid, tall enough to show several rows.
+   No overflow clipping — tooltips need to escape the grid. */
+.quick-bits-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-sm) var(--space-lg);
+  min-height: 150px;
+  padding: var(--space-xs) 4px var(--space-xs) 0;
+}
+
+@media (max-width: 1100px) {
+  .quick-bits-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .quick-bits-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+.quick-bit-chip {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  animation: cardIn 0.4s ease-out backwards;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.quick-bit-chip:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-glass-hover);
+  color: var(--text-primary);
+}
+
+.quick-bit-emoji {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+}
+
+/* ============================================
+   TOOLTIPS — themed to the app's design system
+   ============================================ */
+
+.app-tooltip {
+  visibility: hidden;
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 0;
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--bg-modal);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  z-index: 500;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s cubic-bezier(0.4, 0, 0.2, 1), transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--shadow-glass), 0 0 24px var(--accent-soft);
+  pointer-events: none;
+  backdrop-filter: blur(20px);
+}
+
+.app-tooltip::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent-primary), transparent);
+}
+
+.app-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 22px;
+  border: 6px solid transparent;
+  border-top-color: var(--accent-border);
+}
+
+*:hover>.app-tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.app-tooltip-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  margin-bottom: 4px;
+}
+
+.app-tooltip-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.4;
+  overflow-wrap: break-word;
+}
+
+.app-tooltip-quote {
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--text-primary);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+
+.app-tooltip-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 5px;
+  overflow-wrap: break-word;
 }
 
 .topics-grid {
@@ -862,6 +1093,26 @@ body {
   margin: 0 auto;
   animation: fadeSlideIn 0.35s ease-out;
   padding: 0 var(--space-sm) var(--space-2xl);
+  min-width: 0;
+}
+
+/* Reliability: no unbroken string (URL, ticker, long number) may blow out
+   a dashboard layout */
+.dashboard-detail,
+.dashboard-detail * {
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
+}
+
+.topic-card-body {
+  min-width: 0;
+}
+
+.topic-card-headline,
+.topic-card-overview {
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .reader-surface {
@@ -890,7 +1141,11 @@ mark.hl {
 }
 
 .back-btn {
-  background: var(--bg-glass);
+  /* Sticky so it stays reachable while scrolling long dashboards */
+  position: sticky;
+  top: 6px;
+  z-index: 100;
+  background: var(--bg-modal);
   border: 1px solid var(--border-glass);
   color: var(--text-secondary);
   padding: 8px 18px;
@@ -899,7 +1154,8 @@ mark.hl {
   transition: all 0.2s ease;
   font-size: 0.875rem;
   margin-bottom: var(--space-lg);
-  backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-glass);
 }
 
 .back-btn:hover {
@@ -1325,6 +1581,189 @@ mark.hl {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Twemoji */
+.emoji-img {
+  display: inline-block;
+  vertical-align: -0.22em;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.25));
+}
+
+.emoji-native {
+  line-height: 1;
+}
+
+/* Breather — full-width image separating blocks of text */
+.breather {
+  width: 100%;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-glass);
+  margin: var(--space-xl) 0;
+  cursor: pointer;
+  background: var(--bg-glass);
+}
+
+.breather img {
+  width: 100%;
+  max-height: 340px;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.breather:hover img {
+  transform: scale(1.02);
+}
+
+.breather figcaption {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 6px 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Openable email refs */
+.email-ref.openable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.email-ref.openable:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  transform: translateX(3px);
+}
+
+.email-ref-subject {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Email viewer modal */
+.modal-content.email-viewer {
+  max-width: min(1100px, 94vw);
+  max-height: 92vh;
+}
+
+.email-viewer-head {
+  min-width: 0;
+}
+
+.email-viewer-sender {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.email-viewer-sender span {
+  opacity: 0.7;
+}
+
+.email-viewer-body {
+  font-family: var(--reader-font);
+  line-height: calc(var(--reader-line-height) * 1.05);
+  font-size: 1rem;
+  color: var(--text-primary);
+  max-height: 74vh;
+  overflow-y: auto;
+  padding: var(--space-xl) var(--space-2xl);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.email-viewer-body p {
+  margin-bottom: 1em;
+  color: var(--text-secondary);
+  max-width: 75ch;
+}
+
+.email-viewer-body .email-h {
+  font-family: 'Space Grotesk', var(--reader-font);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-primary);
+  margin: 1.6em 0 0.7em;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.email-viewer-body .email-h:first-child {
+  margin-top: 0;
+}
+
+.email-viewer-body .email-bullets {
+  list-style: none;
+  margin: 0 0 1.1em;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+}
+
+.email-viewer-body .email-bullets li {
+  position: relative;
+  padding-left: 1.4em;
+  color: var(--text-secondary);
+  max-width: 75ch;
+}
+
+.email-viewer-body .email-bullets li::before {
+  content: '▸';
+  position: absolute;
+  left: 0.2em;
+  color: var(--accent-primary);
+}
+
+.email-viewer-body .email-meta-line {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 0.9em;
+  opacity: 0.75;
+}
+
+/* Briefing focus editor */
+.focus-textarea {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 140px;
+}
+
+.custom-badge {
+  margin-left: var(--space-sm);
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  background: var(--accent-soft);
+  color: var(--accent-primary);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.btn-small {
+  margin-top: var(--space-sm);
+  padding: 6px 14px;
+  font-size: 0.78rem;
+}
+
+.btn-small:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Editorial hero image */
