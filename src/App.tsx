@@ -1,72 +1,125 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Briefing, AppScreen, SummaryBlock, HistoryEntry, AccessibilitySettings, CohereKeyType } from './types';
+import {
+    DashboardBriefing, TopicDashboard, AppScreen, HistoryEntry, AppSettings,
+    DEFAULT_SETTINGS, CohereKeyType, ProgressData, LegacyBriefing,
+    FontFamilyOption, ContentWidthOption, ThemeOption,
+} from './types';
 import { ParticlesBackground } from './ParticlesBackground';
-
-// Professional loading messages
-const LOADING_MESSAGES = [
-    "Analyzing your inbox...",
-    "Processing email content...",
-    "Generating summaries...",
-    "Organizing insights...",
-    "Preparing your briefing...",
-    "Almost ready...",
-];
-
+import { DashboardDetail, DashboardCard } from './DashboardView';
 import { mockBriefingAPI } from './mockApi';
 
-// Helper to get API (real or mock)
+// ============================================
+// HELPERS
+// ============================================
+
 const getAPI = () => {
     if (window.briefingAPI) return window.briefingAPI;
     if (import.meta.env.DEV) {
         console.warn('Using Mock API for Browser Development');
         return mockBriefingAPI;
     }
-    throw new Error('BriefingAPI not available. Usage: Run in Electron or Dev mode.');
+    throw new Error('BriefingAPI not available. Run in Electron or Dev mode.');
 };
+
+const FONT_STACKS: Record<FontFamilyOption, string> = {
+    'inter': "'Inter', -apple-system, 'Segoe UI', sans-serif",
+    'space-grotesk': "'Space Grotesk', 'Inter', sans-serif",
+    'serif': "'Source Serif 4', Georgia, 'Times New Roman', serif",
+    'mono': "'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
+    'system': "-apple-system, 'Segoe UI', system-ui, sans-serif",
+};
+
+const FONT_LABELS: Record<FontFamilyOption, string> = {
+    'inter': 'Inter', 'space-grotesk': 'Space Grotesk', 'serif': 'Serif', 'mono': 'Mono', 'system': 'System',
+};
+
+const WIDTH_MAP: Record<ContentWidthOption, string> = {
+    narrow: '720px', comfortable: '920px', wide: '1200px',
+};
+
+const THEME_LABELS: Record<ThemeOption, string> = {
+    midnight: '🌌 Midnight', graphite: '🌑 Graphite', light: '☀️ Light', sepia: '📜 Sepia',
+};
+
+const ACCENT_COLORS = ['#7c5cff', '#06b6d4', '#ec4899', '#f59e0b', '#22c55e', '#3b82f6', '#f43f5e', '#14b8a6'];
+const HIGHLIGHT_COLORS = ['#facc15', '#4ade80', '#67e8f9', '#f9a8d4', '#fdba74'];
+
+function applySettings(s: AppSettings) {
+    const root = document.documentElement;
+    root.style.setProperty('--accent-primary', s.accentColor);
+    root.style.setProperty('--hl-color', s.highlightColor);
+    root.style.setProperty('--font-scale', `${s.fontSize}%`);
+    root.style.setProperty('--reader-line-height', String(s.lineHeight));
+    root.style.setProperty('--reader-font', FONT_STACKS[s.fontFamily] || FONT_STACKS.inter);
+    root.style.setProperty('--content-width', WIDTH_MAP[s.contentWidth] || WIDTH_MAP.comfortable);
+    root.dataset.theme = s.theme;
+    root.classList.toggle('reduce-motion', !s.animationsEnabled);
+}
+
+// Convert legacy history entries (summary cards) into minimal dashboards
+function legacyToDashboards(briefing: LegacyBriefing): TopicDashboard[] {
+    return briefing.summary_blocks.map((b, i) => ({
+        id: `legacy-${i}`,
+        topic: b.headline,
+        category: b.category,
+        icon: b.icon,
+        template: 'pulse' as const,
+        content: {
+            headline: b.headline,
+            overview: '',
+            sentiment: (b.sentiment === 'Good' ? 'Positive' : b.sentiment === 'Bad' ? 'Negative' : 'Neutral') as 'Positive' | 'Negative' | 'Neutral',
+            stats: [],
+            key_points: [
+                ...b.bullet_points.map(t => ({ text: t })),
+                ...(b.detailed_points || []).map(p => typeof p === 'string'
+                    ? { text: p }
+                    : { text: p.text, is_sponsored: p.isSponsored }),
+            ],
+            timeline: [], quotes: [], action_items: [], glossary: [], web_context: [],
+        },
+        sources: [],
+        images: [],
+        emails: [{
+            subject: b.sourceEmailSubject || b.headline,
+            senderName: b.senderName || 'Unknown',
+            senderEmail: b.senderEmail || '',
+        }],
+        generatedAt: '',
+    }));
+}
+
+const LOADING_STAGES: Record<string, string> = {
+    emails: '📥 Reading your inbox',
+    topics: '🧭 Mapping topics',
+    dashboards: '📊 Building dashboards',
+};
+
+// ============================================
+// APP
+// ============================================
 
 function App() {
     const [screen, setScreen] = useState<AppScreen>('idle');
-    const [briefing, setBriefing] = useState<Briefing | null>(null);
+    const [briefing, setBriefing] = useState<DashboardBriefing | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0]);
     const [emailCount, setEmailCount] = useState(0);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [hasApiKey, setHasApiKey] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [apiKeyInput, setApiKeyInput] = useState('');
-    const [selectedBlock, setSelectedBlock] = useState<SummaryBlock | null>(null);
+    const [selectedDash, setSelectedDash] = useState<TopicDashboard | null>(null);
     const [showHistory, setShowHistory] = useState(false);
     const [history, setHistory] = useState<HistoryEntry[]>([]);
-    const [showAccessibility, setShowAccessibility] = useState(false);
-    const [progress, setProgress] = useState<{ current: number; total: number; percent: number } | null>(null);
+    const [showReader, setShowReader] = useState(false);
+    const [progress, setProgress] = useState<ProgressData | null>(null);
     const [showClearConfirm, setShowClearConfirm] = useState(false);
     const [cohereKeyType, setCohereKeyType] = useState<CohereKeyType>('trial');
-    const [accessSettings, setAccessSettings] = useState<AccessibilitySettings>({
-        accentColor: '#06b6d4',
-        fontSize: 100,
-        animationsEnabled: true,
-        backgroundMode: 'simple'
-    });
+    const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+    const [isGenerating, setIsGenerating] = useState(false);
 
-    // Check auth status on mount
     useEffect(() => {
         checkStatus();
     }, []);
-
-    // Rotate loading messages
-    useEffect(() => {
-        if (screen !== 'loading') return;
-
-        const interval = setInterval(() => {
-            setLoadingMessage(prev => {
-                const currentIndex = LOADING_MESSAGES.indexOf(prev);
-                const nextIndex = (currentIndex + 1) % LOADING_MESSAGES.length;
-                return LOADING_MESSAGES[nextIndex];
-            });
-        }, 3000);
-
-        return () => clearInterval(interval);
-    }, [screen]);
 
     const checkStatus = async () => {
         try {
@@ -80,17 +133,14 @@ function App() {
                 setApiKeyInput(savedKey.slice(0, 10) + '...');
             }
 
-            // Load accessibility settings
             if (api.getSettings) {
-                const settings = await api.getSettings();
-                setAccessSettings(settings);
-                applySettings(settings);
+                const s = { ...DEFAULT_SETTINGS, ...(await api.getSettings()) };
+                setSettings(s);
+                applySettings(s);
             }
 
-            // Load Cohere key type setting
             if (api.getCohereKeyType) {
-                const keyType = await api.getCohereKeyType();
-                setCohereKeyType(keyType);
+                setCohereKeyType(await api.getCohereKeyType());
             }
         } catch (err: any) {
             console.error('Failed to check status:', err);
@@ -98,20 +148,12 @@ function App() {
         }
     };
 
-    const applySettings = (settings: AccessibilitySettings) => {
-        document.documentElement.style.setProperty('--accent-primary', settings.accentColor);
-        document.documentElement.style.setProperty('--font-scale', `${settings.fontSize}%`);
-        document.documentElement.classList.toggle('reduce-motion', !settings.animationsEnabled);
-    };
-
-    const saveAccessibilitySettings = async (newSettings: AccessibilitySettings) => {
-        setAccessSettings(newSettings);
-        applySettings(newSettings);
+    const saveSettings = async (next: AppSettings) => {
+        setSettings(next);
+        applySettings(next);
         try {
             const api = getAPI();
-            if (api.setSettings) {
-                await api.setSettings(newSettings);
-            }
+            if (api.setSettings) await api.setSettings(next);
         } catch (err) {
             console.error('Failed to save settings:', err);
         }
@@ -121,12 +163,14 @@ function App() {
         setCohereKeyType(keyType);
         try {
             const api = getAPI();
-            if (api.setCohereKeyType) {
-                await api.setCohereKeyType(keyType);
-            }
+            if (api.setCohereKeyType) await api.setCohereKeyType(keyType);
         } catch (err) {
             console.error('Failed to save Cohere key type:', err);
         }
+    };
+
+    const openExternal = (url: string) => {
+        try { getAPI().openExternal(url); } catch { window.open(url, '_blank'); }
     };
 
     const handleSignIn = async () => {
@@ -148,40 +192,31 @@ function App() {
         setScreen('loading');
         setError(null);
         setProgress(null);
-        setLoadingMessage(LOADING_MESSAGES[0]);
+        setSelectedDash(null);
+        setIsGenerating(true);
 
-        // Streaming state initialization
-        const initialBriefing: Briefing = {
-            title: `Daily Briefing - ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,
-            summary_blocks: []
+        const initial: DashboardBriefing = {
+            title: `Briefing — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,
+            dashboards: [],
         };
-        setBriefing(initialBriefing);
-        setEmailCount(0); // Will update at the end
+        setBriefing(initial);
+        setEmailCount(0);
 
-        // Subscribe to progress and card events
-        let unsubscribeProgress: (() => void) | undefined;
-        let unsubscribeCards: (() => void) | undefined;
+        let unsubProgress: (() => void) | undefined;
+        let unsubDash: (() => void) | undefined;
 
         try {
             const api = getAPI();
 
             if (api.onProgress) {
-                unsubscribeProgress = api.onProgress((data) => {
-                    setProgress(data);
-                });
+                unsubProgress = api.onProgress(data => setProgress(data));
             }
 
-            if (api.onCardGenerated) {
-                unsubscribeCards = api.onCardGenerated((card) => {
-                    setBriefing(prev => {
-                        if (!prev) return { ...initialBriefing, summary_blocks: [card] };
-                        return {
-                            ...prev,
-                            summary_blocks: [...prev.summary_blocks, card]
-                        };
-                    });
-
-                    // Switch to result screen as soon as we have the first card
+            if (api.onDashboardGenerated) {
+                unsubDash = api.onDashboardGenerated((dash) => {
+                    setBriefing(prev => prev
+                        ? { ...prev, dashboards: [...prev.dashboards, dash] }
+                        : { ...initial, dashboards: [dash] });
                     setScreen('result');
                 });
             }
@@ -189,7 +224,6 @@ function App() {
             const result = await api.fetchBriefing();
 
             if (result.success && result.data) {
-                // Final update to ensure consistency and correct count
                 setBriefing(result.data);
                 setEmailCount(result.emailCount || 0);
                 setScreen('result');
@@ -197,8 +231,6 @@ function App() {
                 const errorMsg = result.error || 'Failed to fetch briefing';
                 setError(errorMsg);
                 setScreen('error');
-
-                // Auto-logout on session expiry
                 if (errorMsg.toLowerCase().includes('session has expired') || errorMsg.toLowerCase().includes('invalid_grant') || errorMsg.toLowerCase().includes('sign in')) {
                     setIsAuthenticated(false);
                 }
@@ -207,8 +239,9 @@ function App() {
             setError(err.message || 'An unexpected error occurred');
             setScreen('error');
         } finally {
-            if (unsubscribeProgress) unsubscribeProgress();
-            if (unsubscribeCards) unsubscribeCards();
+            setIsGenerating(false);
+            if (unsubProgress) unsubProgress();
+            if (unsubDash) unsubDash();
         }
     }, []);
 
@@ -225,7 +258,7 @@ function App() {
         setScreen('idle');
         setBriefing(null);
         setError(null);
-        setSelectedBlock(null);
+        setSelectedDash(null);
         setShowHistory(false);
         setProgress(null);
     };
@@ -237,32 +270,36 @@ function App() {
     };
 
     const loadHistoryEntry = (entry: HistoryEntry) => {
-        setBriefing(entry.briefing);
+        const dashboards = entry.dashboards
+            || (entry.briefing ? legacyToDashboards(entry.briefing) : []);
+        setBriefing({
+            title: entry.title || entry.briefing?.title || 'Saved Briefing',
+            dashboards,
+        });
         setEmailCount(entry.emailCount);
+        setSelectedDash(null);
         setScreen('result');
         setShowHistory(false);
     };
 
     return (
         <div className="app-container">
-            <ParticlesBackground mode={accessSettings.backgroundMode || 'simple'} />
+            <div className="aurora" aria-hidden="true">
+                <div className="aurora-blob a1" /><div className="aurora-blob a2" /><div className="aurora-blob a3" />
+            </div>
+            <ParticlesBackground mode={settings.backgroundMode || 'nebula'} />
+
             {/* Header */}
             <header className="header">
-                <div className="logo" onClick={handleReset} style={{ cursor: 'pointer' }}>Email Briefing</div>
-                <div className="header-actions">
-                    <button className="home-btn" onClick={handleReset} title="Go Home">
-                        🏠 Home
-                    </button>
-                    <button className="history-btn" onClick={loadHistory}>
-                        📜 History
-                    </button>
-                    <button className="settings-btn" onClick={() => setShowAccessibility(true)} title="Accessibility">
-                        🎨
-                    </button>
-                    <button className="settings-btn" onClick={() => setShowSettings(true)}>
-                        ⚙️ Settings
-                    </button>
+                <div className="logo" onClick={handleReset}>
+                    <span className="logo-mark">◈</span> Email Briefing
                 </div>
+                <nav className="header-actions">
+                    <button className="nav-pill" onClick={handleReset}>Home</button>
+                    <button className="nav-pill" onClick={loadHistory}>History</button>
+                    <button className="nav-pill" onClick={() => setShowReader(true)} title="Reading & appearance">Aa</button>
+                    <button className="nav-pill" onClick={() => setShowSettings(true)}>⚙</button>
+                </nav>
             </header>
 
             {/* Main Content */}
@@ -270,8 +307,13 @@ function App() {
                 {/* Idle Screen */}
                 {screen === 'idle' && (
                     <div className="idle-screen">
+                        <div className="idle-eyebrow">AI-POWERED INBOX INTELLIGENCE</div>
+                        <h1 className="idle-title">
+                            Your inbox, distilled into<br /><span className="gradient-text">living dashboards</span>
+                        </h1>
                         <p className="idle-subtitle">
-                            Transform your inbox chaos into executive clarity
+                            Topics are detected, deduplicated, enriched with live web context and imagery —
+                            then rendered as rich, readable dashboards.
                         </p>
 
                         <button
@@ -279,28 +321,21 @@ function App() {
                             onClick={handleFetchBriefing}
                             disabled={!isAuthenticated || !hasApiKey}
                         >
-                            ✨ Brief Me
+                            <span className="brief-button-inner">✨ Brief Me</span>
                         </button>
 
                         <div className="auth-status">
                             <div className={`auth-badge ${hasApiKey ? 'connected' : 'disconnected'}`}>
-                                {hasApiKey ? '✓' : '✗'} Cohere API Key
+                                {hasApiKey ? '●' : '○'} Cohere API
                             </div>
-
                             <div className={`auth-badge ${isAuthenticated ? 'connected' : 'disconnected'}`}>
-                                {isAuthenticated ? '✓' : '✗'} Google Account
+                                {isAuthenticated ? '●' : '○'} Google Account
                             </div>
-
                             {!isAuthenticated && (
-                                <button className="connect-btn" onClick={handleSignIn}>
-                                    Sign in with Google
-                                </button>
+                                <button className="connect-btn" onClick={handleSignIn}>Sign in with Google</button>
                             )}
-
                             {!hasApiKey && (
-                                <button className="connect-btn" onClick={() => setShowSettings(true)}>
-                                    Add API Key
-                                </button>
+                                <button className="connect-btn" onClick={() => setShowSettings(true)}>Add API Key</button>
                             )}
                         </div>
                     </div>
@@ -309,157 +344,76 @@ function App() {
                 {/* Loading Screen */}
                 {screen === 'loading' && (
                     <div className="loading-screen">
-                        <div className="loading-spinner" />
-                        <p className="loading-message">{loadingMessage}</p>
-                        {progress ? (
-                            <p className="loading-count">
-                                Processing {progress.current} of {progress.total} emails ({progress.percent}%)
-                            </p>
-                        ) : (
-                            <p className="loading-count">Initializing pipeline...</p>
+                        <div className="orbit-loader">
+                            <div className="orbit-ring" /><div className="orbit-ring r2" /><div className="orbit-core" />
+                        </div>
+                        <p className="loading-message">
+                            {progress ? (LOADING_STAGES[progress.stage] || progress.message) : 'Warming up the pipeline'}
+                        </p>
+                        {progress && (
+                            <>
+                                <div className="progress-bar">
+                                    <div className="progress-fill" style={{ width: `${progress.percent}%` }} />
+                                </div>
+                                <p className="loading-count">{progress.message} · {progress.current}/{progress.total}</p>
+                            </>
                         )}
                     </div>
                 )}
 
-                {/* Results Screen */}
-                {screen === 'result' && briefing && !selectedBlock && (
+                {/* Results: topic grid */}
+                {screen === 'result' && briefing && !selectedDash && (
                     <div className="results-screen">
                         <div className="results-header">
-                            <h1 className="briefing-title">{briefing.title}</h1>
+                            <h1 className="briefing-title gradient-text">{briefing.title}</h1>
                             <p className="briefing-meta">
-                                {progress && progress.percent < 100 ? (
-                                    <span style={{ color: 'var(--accent-primary)', fontWeight: 'bold' }}>
-                                        {/* Spinner could be added here if desired */}
-                                        Processing... {progress.percent}% ({progress.current}/{progress.total})
+                                {isGenerating && progress && progress.percent < 100 ? (
+                                    <span className="live-indicator">
+                                        <span className="live-dot" /> Building dashboards… {progress.current}/{progress.total}
                                     </span>
                                 ) : (
-                                    <span>Synthesized from {emailCount} email{emailCount !== 1 ? 's' : ''}</span>
+                                    <span>
+                                        {briefing.dashboards.length} topic{briefing.dashboards.length !== 1 ? 's' : ''}
+                                        {emailCount > 0 ? ` · ${emailCount} emails` : ''}
+                                    </span>
                                 )}
                             </p>
-                            <button className="reset-btn" onClick={handleReset}>
-                                ← New Brief
-                            </button>
                         </div>
 
-                        <div className="cards-grid">
-                            {briefing.summary_blocks.map((block, index) => (
-                                <article
-                                    key={index}
-                                    className="glass-card clickable"
-                                    style={{ animationDelay: `${index * 0.1}s` }}
-                                    onClick={() => setSelectedBlock(block)}
-                                >
-                                    <div className="card-header">
-                                        <span className="card-icon">{block.icon}</span>
-                                        <span className="card-category">{block.category}</span>
-                                        {block.isSponsored && (
-                                            <span className="sponsored-badge">📢 Ad</span>
-                                        )}
-                                        <span className={`sentiment-badge ${block.sentiment.toLowerCase()}`} />
-                                    </div>
-
-                                    <h2 className="card-headline">{block.headline}</h2>
-
-                                    {block.senderName && (
-                                        <p className="card-sender">From: {block.senderName}</p>
-                                    )}
-
-                                    <ul className="card-bullets">
-                                        {block.bullet_points.map((point, i) => (
-                                            <li key={i}>{point}</li>
-                                        ))}
-                                    </ul>
-
-                                    <p className="card-hint">Click to view full details →</p>
-                                </article>
+                        <div className="topics-grid">
+                            {briefing.dashboards.map((dash, index) => (
+                                <DashboardCard key={dash.id || index} dash={dash} index={index}
+                                    onClick={() => setSelectedDash(dash)} />
                             ))}
-                        </div>
-                    </div>
-                )}
-
-                {/* Detail View Screen */}
-                {screen === 'result' && selectedBlock && (
-                    <div className="detail-screen">
-                        <div className="detail-header">
-                            <button className="back-btn" onClick={() => setSelectedBlock(null)}>
-                                ← Back to Briefing
-                            </button>
-                            <div className="detail-meta">
-                                <span className="card-icon">{selectedBlock.icon}</span>
-                                <span className="card-category">{selectedBlock.category}</span>
-                                {selectedBlock.isSponsored && (
-                                    <span className="sponsored-badge">📢 Sponsored Content</span>
-                                )}
-                                <span className={`sentiment-badge ${selectedBlock.sentiment.toLowerCase()}`} />
-                            </div>
-                        </div>
-
-                        <h1 className="detail-headline">{selectedBlock.headline}</h1>
-
-                        {selectedBlock.sourceEmailSubject && (
-                            <p className="detail-source">
-                                Source: {selectedBlock.sourceEmailSubject}
-                            </p>
-                        )}
-
-                        <div className="detail-content glass-card">
-                            <h3>Key Takeaways</h3>
-                            <ul className="detail-bullets">
-                                {selectedBlock.bullet_points.map((point, i) => (
-                                    <li key={i} className="bullet-item-with-source">
-                                        <span>{point}</span>
-                                        <div className="tooltip-container">
-                                            <button className="source-btn">📄</button>
-                                            <div className="tooltip-bubble">
-                                                <div className="tooltip-header">Source Info</div>
-                                                <div className="tooltip-content">
-                                                    <div><strong>Subject:</strong> {selectedBlock.sourceEmailSubject || 'Unknown'}</div>
-                                                    <div style={{ marginTop: '4px' }}><strong>Sender:</strong> {selectedBlock.senderName || 'Unknown'}</div>
-                                                    <div style={{ fontSize: '0.8em', opacity: 0.8 }}>{selectedBlock.senderEmail}</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-
-                            {selectedBlock.detailed_points && selectedBlock.detailed_points.length > 0 && (
-                                <>
-                                    <h3>Full Details</h3>
-                                    <ul className="detail-full-points">
-                                        {selectedBlock.detailed_points.map((point, i) => {
-                                            // Handle both legacy string format and new object format
-                                            const isObject = typeof point === 'object' && point !== null;
-                                            const text = isObject ? (point as { text: string }).text : point as string;
-                                            const isSponsored = isObject ? (point as { isSponsored?: boolean }).isSponsored : false;
-
-                                            return (
-                                                <li key={i} className={isSponsored ? 'sponsored-point' : ''}>
-                                                    {isSponsored && <span className="point-sponsored-badge">📢 Ad</span>}
-                                                    {text}
-                                                </li>
-                                            );
-                                        })}
-                                    </ul>
-                                </>
+                            {isGenerating && progress && progress.stage === 'dashboards' && progress.current < progress.total && (
+                                <div className="topic-card skeleton-card">
+                                    <div className="skeleton-shimmer" />
+                                    <p>Generating next dashboard…</p>
+                                </div>
                             )}
                         </div>
                     </div>
                 )}
 
+                {/* Dashboard detail */}
+                {screen === 'result' && selectedDash && (
+                    <DashboardDetail
+                        dash={selectedDash}
+                        highlightsEnabled={settings.highlightsEnabled}
+                        openExternal={openExternal}
+                        onBack={() => setSelectedDash(null)}
+                    />
+                )}
+
                 {/* Error Screen */}
                 {screen === 'error' && (
                     <div className="error-screen">
-                        <div className="error-icon">😵</div>
+                        <div className="error-icon">⚠️</div>
                         <h2 className="error-title">Something went wrong</h2>
                         <p className="error-message">{error}</p>
                         <div className="error-actions">
-                            <button className="btn-secondary" onClick={handleReset}>
-                                Go Back
-                            </button>
-                            <button className="btn-primary" onClick={handleFetchBriefing}>
-                                Try Again
-                            </button>
+                            <button className="btn-secondary" onClick={handleReset}>Go Back</button>
+                            <button className="btn-primary" onClick={handleFetchBriefing}>Try Again</button>
                         </div>
                     </div>
                 )}
@@ -471,9 +425,7 @@ function App() {
                     <div className="modal-content" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
                             <h2 className="modal-title">Settings</h2>
-                            <button className="modal-close" onClick={() => setShowSettings(false)}>
-                                ×
-                            </button>
+                            <button className="modal-close" onClick={() => setShowSettings(false)}>×</button>
                         </div>
 
                         <div className="form-group">
@@ -487,82 +439,47 @@ function App() {
                             />
                             <p className="form-hint">
                                 Get your API key from{' '}
-                                <a
-                                    href="#"
-                                    onClick={(e) => {
-                                        e.preventDefault();
-                                        window.briefingAPI.openExternal('https://dashboard.cohere.com/api-keys');
-                                    }}
-                                    style={{ color: '#667eea' }}
-                                >
+                                <a href="#" onClick={(e) => { e.preventDefault(); openExternal('https://dashboard.cohere.com/api-keys'); }}>
                                     dashboard.cohere.com
                                 </a>
                             </p>
                         </div>
 
                         <div className="form-group">
-                            <label className="form-label">
-                                API Key Type
-                                <span className="tooltip-trigger" title="Trial keys have slower response times due to rate limiting. Production keys are faster. This setting adjusts the timeout accordingly (90s for trial, 60s for production).">
-                                    ⓘ
-                                </span>
-                            </label>
-                            <div className="key-type-toggle">
-                                <button
-                                    className={`key-type-btn ${cohereKeyType === 'trial' ? 'active' : ''}`}
-                                    onClick={() => saveCohereKeyType('trial')}
-                                >
-                                    🧪 Trial
-                                </button>
-                                <button
-                                    className={`key-type-btn ${cohereKeyType === 'production' ? 'active' : ''}`}
-                                    onClick={() => saveCohereKeyType('production')}
-                                >
-                                    🚀 Production
-                                </button>
+                            <label className="form-label">API Key Type</label>
+                            <div className="segmented">
+                                <button className={`segment ${cohereKeyType === 'trial' ? 'active' : ''}`}
+                                    onClick={() => saveCohereKeyType('trial')}>🧪 Trial</button>
+                                <button className={`segment ${cohereKeyType === 'production' ? 'active' : ''}`}
+                                    onClick={() => saveCohereKeyType('production')}>🚀 Production</button>
                             </div>
-                            <p className="form-hint key-type-hint">
+                            <p className="form-hint">
                                 {cohereKeyType === 'trial'
-                                    ? 'Using 90s timeout for trial API (slower due to rate limits)'
-                                    : 'Using 60s timeout for production API (faster responses)'}
+                                    ? 'Trial keys are rate-limited; a longer 90s timeout is used.'
+                                    : 'Production keys use a faster 60s timeout.'}
                             </p>
                         </div>
 
                         <div className="form-group">
                             <label className="form-label">Google Account</label>
                             <div className={`auth-badge ${isAuthenticated ? 'connected' : 'disconnected'}`}>
-                                {isAuthenticated ? '✓ Connected' : '✗ Not connected'}
+                                {isAuthenticated ? '● Connected' : '○ Not connected'}
                             </div>
-                            {!isAuthenticated && (
-                                <button
-                                    className="connect-btn"
-                                    style={{ marginTop: '0.5rem' }}
-                                    onClick={handleSignIn}
-                                >
+                            {!isAuthenticated ? (
+                                <button className="connect-btn" style={{ marginTop: '0.5rem' }} onClick={handleSignIn}>
                                     Sign in with Google
                                 </button>
-                            )}
-                            {isAuthenticated && (
-                                <button
-                                    className="connect-btn"
-                                    style={{ marginTop: '0.5rem' }}
-                                    onClick={async () => {
-                                        await getAPI().signOut();
-                                        setIsAuthenticated(false);
-                                    }}
-                                >
+                            ) : (
+                                <button className="connect-btn" style={{ marginTop: '0.5rem' }}
+                                    onClick={async () => { await getAPI().signOut(); setIsAuthenticated(false); }}>
                                     Sign Out
                                 </button>
                             )}
                         </div>
 
                         <div className="modal-actions">
-                            <button className="btn-secondary" onClick={() => setShowSettings(false)}>
-                                Cancel
-                            </button>
-                            <button className="btn-primary" onClick={handleSaveApiKey}>
-                                Save
-                            </button>
+                            <button className="btn-secondary" onClick={() => setShowSettings(false)}>Cancel</button>
+                            <button className="btn-primary" onClick={handleSaveApiKey}>Save</button>
                         </div>
                     </div>
                 </div>
@@ -576,16 +493,11 @@ function App() {
                             <h2 className="modal-title">Past Briefings</h2>
                             <div className="modal-header-actions">
                                 {history.length > 0 && (
-                                    <button
-                                        className="clear-history-btn"
-                                        onClick={() => setShowClearConfirm(true)}
-                                    >
-                                        🗑️ Clear All
+                                    <button className="clear-history-btn" onClick={() => setShowClearConfirm(true)}>
+                                        Clear All
                                     </button>
                                 )}
-                                <button className="modal-close" onClick={() => setShowHistory(false)}>
-                                    ×
-                                </button>
+                                <button className="modal-close" onClick={() => setShowHistory(false)}>×</button>
                             </div>
                         </div>
 
@@ -594,23 +506,18 @@ function App() {
                                 <p className="history-empty">No saved briefings yet. Generate your first briefing!</p>
                             ) : (
                                 history.map((entry, index) => (
-                                    <div
-                                        key={index}
-                                        className="history-item glass-card clickable"
-                                        onClick={() => loadHistoryEntry(entry)}
-                                    >
+                                    <div key={index} className="history-item" onClick={() => loadHistoryEntry(entry)}>
                                         <div className="history-item-date">
                                             {new Date(entry.date).toLocaleDateString('en-US', {
-                                                weekday: 'short',
-                                                month: 'short',
-                                                day: 'numeric',
-                                                hour: '2-digit',
-                                                minute: '2-digit'
+                                                weekday: 'short', month: 'short', day: 'numeric',
+                                                hour: '2-digit', minute: '2-digit'
                                             })}
                                         </div>
-                                        <div className="history-item-title">{entry.briefing.title}</div>
+                                        <div className="history-item-title">
+                                            {entry.title || entry.briefing?.title || 'Briefing'}
+                                        </div>
                                         <div className="history-item-meta">
-                                            {entry.emailCount} email{entry.emailCount !== 1 ? 's' : ''} • {entry.briefing.summary_blocks.length} cards
+                                            {entry.emailCount} emails · {(entry.dashboards?.length ?? entry.briefing?.summary_blocks.length ?? 0)} topics
                                         </div>
                                     </div>
                                 ))
@@ -620,75 +527,117 @@ function App() {
                 </div>
             )}
 
-            {/* Accessibility Modal */}
-            {showAccessibility && (
-                <div className="modal-overlay" onClick={() => setShowAccessibility(false)}>
-                    <div className="modal-content settings-modal" onClick={e => e.stopPropagation()}>
+            {/* Reader / Appearance Panel */}
+            {showReader && (
+                <div className="modal-overlay" onClick={() => setShowReader(false)}>
+                    <div className="modal-content reader-modal" onClick={e => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2 className="modal-title">Appearance & Accessibility</h2>
-                            <button className="modal-close" onClick={() => setShowAccessibility(false)}>×</button>
+                            <h2 className="modal-title">Reading & Appearance</h2>
+                            <button className="modal-close" onClick={() => setShowReader(false)}>×</button>
                         </div>
 
                         <div className="settings-form">
                             <div className="form-group">
-                                <label>Accent Color</label>
-                                <div className="color-picker-grid">
-                                    {['#06b6d4', '#8b5cf6', '#ec4899', '#f59e0b', '#22c55e', '#3b82f6'].map(color => (
-                                        <button
-                                            key={color}
-                                            className={`color-swatch ${accessSettings.accentColor === color ? 'active' : ''}`}
-                                            style={{ backgroundColor: color }}
-                                            onClick={() => saveAccessibilitySettings({ ...accessSettings, accentColor: color })}
-                                        />
+                                <label>Theme</label>
+                                <div className="segmented wrap">
+                                    {(Object.keys(THEME_LABELS) as ThemeOption[]).map(t => (
+                                        <button key={t} className={`segment ${settings.theme === t ? 'active' : ''}`}
+                                            onClick={() => saveSettings({ ...settings, theme: t })}>
+                                            {THEME_LABELS[t]}
+                                        </button>
                                     ))}
                                 </div>
                             </div>
 
                             <div className="form-group">
-                                <label>Background Style</label>
-                                <div className="background-selector">
-                                    <button
-                                        className={`bg-option ${accessSettings.backgroundMode === 'simple' || !accessSettings.backgroundMode ? 'active' : ''}`}
-                                        onClick={() => saveAccessibilitySettings({ ...accessSettings, backgroundMode: 'simple' })}
-                                    >
-                                        Simple 🕸️
-                                    </button>
-                                    <button
-                                        className={`bg-option ${accessSettings.backgroundMode === 'snow' ? 'active' : ''}`}
-                                        onClick={() => saveAccessibilitySettings({ ...accessSettings, backgroundMode: 'snow' })}
-                                    >
-                                        Snow ❄️
-                                    </button>
-                                    <button
-                                        className={`bg-option ${accessSettings.backgroundMode === 'nebula' ? 'active' : ''}`}
-                                        onClick={() => saveAccessibilitySettings({ ...accessSettings, backgroundMode: 'nebula' })}
-                                    >
-                                        Nebula 🌌
-                                    </button>
+                                <label>Accent Color</label>
+                                <div className="color-picker-grid">
+                                    {ACCENT_COLORS.map(color => (
+                                        <button key={color}
+                                            className={`color-swatch ${settings.accentColor === color ? 'active' : ''}`}
+                                            style={{ backgroundColor: color }}
+                                            onClick={() => saveSettings({ ...settings, accentColor: color })} />
+                                    ))}
                                 </div>
                             </div>
 
                             <div className="form-group">
-                                <label>Font Size ({accessSettings.fontSize}%)</label>
-                                <input
-                                    type="range"
-                                    min="80"
-                                    max="150"
-                                    step="10"
-                                    value={accessSettings.fontSize}
-                                    onChange={(e) => saveAccessibilitySettings({ ...accessSettings, fontSize: Number(e.target.value) })}
-                                    className="range-slider"
-                                />
+                                <label>Highlight Color</label>
+                                <div className="color-picker-grid">
+                                    {HIGHLIGHT_COLORS.map(color => (
+                                        <button key={color}
+                                            className={`color-swatch ${settings.highlightColor === color ? 'active' : ''}`}
+                                            style={{ backgroundColor: color }}
+                                            onClick={() => saveSettings({ ...settings, highlightColor: color })} />
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="form-group row">
+                                <label>Highlight key phrases</label>
+                                <label className="toggle-switch">
+                                    <input type="checkbox" checked={settings.highlightsEnabled}
+                                        onChange={(e) => saveSettings({ ...settings, highlightsEnabled: e.target.checked })} />
+                                    <span className="slider round"></span>
+                                </label>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Font</label>
+                                <div className="segmented wrap">
+                                    {(Object.keys(FONT_LABELS) as FontFamilyOption[]).map(f => (
+                                        <button key={f} className={`segment ${settings.fontFamily === f ? 'active' : ''}`}
+                                            style={{ fontFamily: FONT_STACKS[f] }}
+                                            onClick={() => saveSettings({ ...settings, fontFamily: f })}>
+                                            {FONT_LABELS[f]}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Font Size ({settings.fontSize}%)</label>
+                                <input type="range" min="80" max="150" step="5" value={settings.fontSize}
+                                    onChange={(e) => saveSettings({ ...settings, fontSize: Number(e.target.value) })}
+                                    className="range-slider" />
+                            </div>
+
+                            <div className="form-group">
+                                <label>Line Spacing ({settings.lineHeight.toFixed(1)})</label>
+                                <input type="range" min="1.3" max="2.2" step="0.1" value={settings.lineHeight}
+                                    onChange={(e) => saveSettings({ ...settings, lineHeight: Number(e.target.value) })}
+                                    className="range-slider" />
+                            </div>
+
+                            <div className="form-group">
+                                <label>Reading Width</label>
+                                <div className="segmented">
+                                    {(['narrow', 'comfortable', 'wide'] as ContentWidthOption[]).map(w => (
+                                        <button key={w} className={`segment ${settings.contentWidth === w ? 'active' : ''}`}
+                                            onClick={() => saveSettings({ ...settings, contentWidth: w })}>
+                                            {w[0].toUpperCase() + w.slice(1)}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="form-group">
+                                <label>Background Effect</label>
+                                <div className="segmented">
+                                    {([['simple', 'Calm'], ['snow', 'Snow ❄️'], ['nebula', 'Nebula 🌌']] as const).map(([mode, label]) => (
+                                        <button key={mode} className={`segment ${settings.backgroundMode === mode ? 'active' : ''}`}
+                                            onClick={() => saveSettings({ ...settings, backgroundMode: mode })}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             <div className="form-group row">
                                 <label>Enable Animations</label>
                                 <label className="toggle-switch">
-                                    <input
-                                        type="checkbox"
-                                        checked={accessSettings.animationsEnabled}
-                                        onChange={(e) => saveAccessibilitySettings({ ...accessSettings, animationsEnabled: e.target.checked })}
-                                    />
+                                    <input type="checkbox" checked={settings.animationsEnabled}
+                                        onChange={(e) => saveSettings({ ...settings, animationsEnabled: e.target.checked })} />
                                     <span className="slider round"></span>
                                 </label>
                             </div>
@@ -708,22 +657,12 @@ function App() {
                             This action cannot be undone.
                         </p>
                         <div className="confirm-actions">
-                            <button
-                                className="btn-secondary"
-                                onClick={() => setShowClearConfirm(false)}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                className="btn-danger"
-                                onClick={async () => {
-                                    await getAPI().clearHistory();
-                                    setHistory([]);
-                                    setShowClearConfirm(false);
-                                }}
-                            >
-                                Delete All
-                            </button>
+                            <button className="btn-secondary" onClick={() => setShowClearConfirm(false)}>Cancel</button>
+                            <button className="btn-danger" onClick={async () => {
+                                await getAPI().clearHistory();
+                                setHistory([]);
+                                setShowClearConfirm(false);
+                            }}>Delete All</button>
                         </div>
                     </div>
                 </div>

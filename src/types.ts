@@ -1,82 +1,153 @@
-import { z } from 'zod';
-
 // ============================================
-// AI OUTPUT SCHEMA (Zod)
+// DASHBOARD TYPES (mirror of electron/types.ts)
 // ============================================
 
-// Detailed point with per-point sponsored flag
-export const DetailedPointSchema = z.union([
-    z.string(), // Legacy format (plain string)
-    z.object({
-        text: z.string(),
-        isSponsored: z.boolean().optional()
-    })
-]);
+export type DashboardTemplate = 'pulse' | 'editorial' | 'timeline' | 'spotlight' | 'matrix';
 
-export const SummaryBlockSchema = z.object({
-    category: z.enum(['Tech', 'Markets', 'World', 'AI', 'Business', 'Science', 'Politics', 'General']),
-    icon: z.string().describe('An emoji representing this category'),
-    headline: z.string().describe('A punchy, one-line headline'),
-    bullet_points: z.array(z.string()).describe('3-5 key takeaways'),
-    detailed_points: z.array(DetailedPointSchema).describe('Full organized content from the email').optional(),
-    sentiment: z.enum(['Neutral', 'Good', 'Bad']).describe('Overall sentiment of this topic'),
-    isSponsored: z.boolean().describe('True if ENTIRE email is an ad/sponsored content').optional(),
-    sourceEmailSubject: z.string().describe('Original email subject line').optional(),
-    senderName: z.string().describe('Name of the email sender').optional(),
-    senderEmail: z.string().describe('Email address of the sender').optional(),
-});
-
-// Helper type for detailed points
-export type DetailedPoint = z.infer<typeof DetailedPointSchema>;
-
-export const BriefingSchema = z.object({
-    title: z.string().describe('A witty, creative title for today\'s briefing'),
-    summary_blocks: z.array(SummaryBlockSchema).describe('Array of categorized summaries'),
-});
-
-// ============================================
-// TYPESCRIPT TYPES
-// ============================================
-
-export type SummaryBlock = z.infer<typeof SummaryBlockSchema>;
-export type Briefing = z.infer<typeof BriefingSchema>;
-
-// App State Types
-export type AppScreen = 'idle' | 'loading' | 'result' | 'error' | 'settings';
-
-export interface AppState {
-    screen: AppScreen;
-    briefing: Briefing | null;
-    error: string | null;
-    loadingMessage: string;
-    emailCount: number;
-    isAuthenticated: boolean;
-    hasApiKey: boolean;
+export interface SearchSource {
+    title: string;
+    url: string;
+    snippet: string;
+    engine: 'duckduckgo' | 'wikipedia';
 }
 
-// IPC API Types
+export interface DashboardImage {
+    url: string;
+    title?: string;
+    sourceUrl?: string;
+    provider: 'wikipedia' | 'openverse';
+}
+
+export interface EmailRef {
+    subject: string;
+    senderName: string;
+    senderEmail: string;
+}
+
+export interface DashboardStat {
+    label: string;
+    value: string;
+    context?: string;
+}
+
+export interface DashboardKeyPoint {
+    text: string;
+    tag?: string;
+    is_sponsored?: boolean;
+}
+
+export interface DashboardContent {
+    headline: string;
+    overview: string;
+    sentiment: 'Positive' | 'Negative' | 'Neutral';
+    stats: DashboardStat[];
+    key_points: DashboardKeyPoint[];
+    timeline: Array<{ label: string; text: string }>;
+    quotes: Array<{ text: string; attribution?: string }>;
+    action_items: string[];
+    glossary: Array<{ term: string; definition: string }>;
+    web_context: Array<{ title: string; text: string; source_index?: number }>;
+    fun_fact?: string;
+}
+
+export interface TopicDashboard {
+    id: string;
+    topic: string;
+    category: string;
+    icon: string;
+    template: DashboardTemplate;
+    content: DashboardContent;
+    sources: SearchSource[];
+    images: DashboardImage[];
+    emails: EmailRef[];
+    generatedAt: string;
+}
+
+export interface DashboardBriefing {
+    title: string;
+    dashboards: TopicDashboard[];
+}
+
+// ============================================
+// LEGACY TYPES (old history entries)
+// ============================================
+
+export interface LegacySummaryBlock {
+    category: string;
+    icon: string;
+    headline: string;
+    bullet_points: string[];
+    detailed_points?: Array<string | { text: string; isSponsored?: boolean }>;
+    sentiment: string;
+    isSponsored?: boolean;
+    sourceEmailSubject?: string;
+    senderName?: string;
+    senderEmail?: string;
+}
+
+export interface LegacyBriefing {
+    title: string;
+    summary_blocks: LegacySummaryBlock[];
+}
+
+// ============================================
+// APP STATE TYPES
+// ============================================
+
+export type AppScreen = 'idle' | 'loading' | 'result' | 'error';
+
 export interface HistoryEntry {
     date: string;
-    briefing: Briefing;
+    title?: string;
     emailCount: number;
+    dashboards?: TopicDashboard[];
+    briefing?: LegacyBriefing; // legacy entries
 }
 
-export interface AccessibilitySettings {
+export type FontFamilyOption = 'inter' | 'space-grotesk' | 'serif' | 'mono' | 'system';
+export type ContentWidthOption = 'narrow' | 'comfortable' | 'wide';
+export type ThemeOption = 'midnight' | 'graphite' | 'light' | 'sepia';
+export type BackgroundMode = 'simple' | 'snow' | 'nebula';
+
+export interface AppSettings {
     accentColor: string;
+    highlightColor: string;
     fontSize: number;
+    fontFamily: FontFamilyOption;
+    lineHeight: number;
+    contentWidth: ContentWidthOption;
+    theme: ThemeOption;
+    highlightsEnabled: boolean;
     animationsEnabled: boolean;
-    backgroundMode: 'simple' | 'snow' | 'nebula';
+    backgroundMode: BackgroundMode;
 }
+
+export const DEFAULT_SETTINGS: AppSettings = {
+    accentColor: '#7c5cff',
+    highlightColor: '#facc15',
+    fontSize: 100,
+    fontFamily: 'inter',
+    lineHeight: 1.7,
+    contentWidth: 'comfortable',
+    theme: 'midnight',
+    highlightsEnabled: true,
+    animationsEnabled: true,
+    backgroundMode: 'nebula',
+};
 
 // Cohere API key type - affects timeout values
 export type CohereKeyType = 'trial' | 'production';
 
-export interface CohereSettings {
-    keyType: CohereKeyType;
+export interface ProgressData {
+    stage: string;
+    message: string;
+    current: number;
+    total: number;
+    percent: number;
 }
 
 export interface BriefingAPI {
-    fetchBriefing: () => Promise<{ success: boolean; data?: Briefing; error?: string; emailCount?: number }>;
+    fetchBriefing: () => Promise<{ success: boolean; data?: DashboardBriefing; error?: string; emailCount?: number }>;
     signInWithGoogle: () => Promise<{ success: boolean; error?: string }>;
     signOut: () => Promise<void>;
     checkAuthStatus: () => Promise<{ isAuthenticated: boolean; hasApiKey: boolean }>;
@@ -84,13 +155,13 @@ export interface BriefingAPI {
     getApiKey: () => Promise<string | null>;
     getHistory: () => Promise<HistoryEntry[]>;
     clearHistory: () => Promise<void>;
-    getSettings: () => Promise<AccessibilitySettings>;
-    setSettings: (settings: AccessibilitySettings) => Promise<void>;
+    getSettings: () => Promise<AppSettings>;
+    setSettings: (settings: AppSettings) => Promise<void>;
     getCohereKeyType: () => Promise<CohereKeyType>;
     setCohereKeyType: (keyType: CohereKeyType) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
-    onProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => () => void;
-    onCardGenerated: (callback: (card: SummaryBlock) => void) => () => void;
+    onProgress: (callback: (data: ProgressData) => void) => () => void;
+    onDashboardGenerated: (callback: (dashboard: TopicDashboard) => void) => () => void;
 }
 
 declare global {

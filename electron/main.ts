@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, session } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { ChatCohere } from '@langchain/cohere';
@@ -8,7 +9,17 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import Store from 'electron-store';
 import { convert } from 'html-to-text';
 import * as dotenv from 'dotenv';
-import { BriefingSchema, Briefing } from './types';
+import { z } from 'zod';
+import {
+    TopicPlanSchema,
+    DashboardContentSchema,
+    DashboardTemplate,
+    SearchSource,
+    DashboardImage,
+    TopicDashboard,
+    DashboardBriefing,
+    EmailRef,
+} from './types';
 import pLimit from 'p-limit';
 
 // Load environment variables
@@ -18,24 +29,37 @@ dotenv.config();
 // CONFIGURATION
 // ============================================
 
+interface HistoryEntryStore {
+    date: string;
+    title: string;
+    emailCount: number;
+    dashboards?: TopicDashboard[];
+    briefing?: any; // legacy entries
+}
+
+const DEFAULT_SETTINGS = {
+    accentColor: '#7c5cff',
+    highlightColor: '#facc15',
+    fontSize: 100,
+    fontFamily: 'inter',
+    lineHeight: 1.7,
+    contentWidth: 'comfortable',
+    theme: 'midnight',
+    highlightsEnabled: true,
+    animationsEnabled: true,
+    backgroundMode: 'nebula',
+};
+
 const store = new Store<{
     cohereApiKey?: string;
+    cohereKeyType?: 'trial' | 'production';
     googleTokens?: {
         access_token?: string;
         refresh_token?: string;
         expiry_date?: number;
     };
-    briefingHistory?: Array<{
-        date: string;
-        briefing: Briefing;
-        emailCount: number;
-    }>;
-    accessibilitySettings?: {
-        accentColor: string;
-        fontSize: number;
-        animationsEnabled: boolean;
-        backgroundMode: 'simple' | 'snow' | 'nebula';
-    };
+    briefingHistory?: HistoryEntryStore[];
+    accessibilitySettings?: Record<string, any>;
 }>({
     encryptionKey: 'briefing-os-local-secure-key-v1'
 });
@@ -56,10 +80,10 @@ let mainWindow: BrowserWindow | null = null;
 function createWindow() {
     mainWindow = new BrowserWindow({
         title: 'Email Briefing',
-        width: 1200,
-        height: 800,
-        minWidth: 900,
-        minHeight: 600,
+        width: 1280,
+        height: 840,
+        minWidth: 940,
+        minHeight: 620,
         maximizable: true,
         // Windows 11 Mica effect
         backgroundMaterial: 'mica',
@@ -79,13 +103,10 @@ function createWindow() {
         },
     });
 
-    // Remove default menu bar
     mainWindow.setMenuBarVisibility(false);
 
-    // Load the app
     if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
         mainWindow.loadURL('http://localhost:5173');
-        // DevTools disabled - use View menu or Ctrl+Shift+I if needed
     } else {
         mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
     }
@@ -97,16 +118,17 @@ function createWindow() {
 
 app.whenReady().then(() => {
     // SECURITY: Content Security Policy
+    // img-src allows https so dashboard images (Wikimedia/Openverse/etc.) can render.
+    // Network fetches for search run in the main process, not the renderer.
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
         callback({
             responseHeaders: {
                 ...details.responseHeaders,
-                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://api.cohere.ai https://api.cohere.com;"]
+                'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.cohere.ai https://api.cohere.com;"]
             }
         });
     });
 
-    // Ensure userData directory exists for credentials.json
     const userDataPath = app.getPath('userData');
     if (!fs.existsSync(userDataPath)) {
         fs.mkdirSync(userDataPath, { recursive: true });
@@ -132,16 +154,10 @@ app.on('window-all-closed', () => {
 // OAUTH2 INITIALIZATION
 // ============================================
 
-// ============================================
-// OAUTH2 INITIALIZATION
-// ============================================
-
 function initializeOAuth() {
-    // Priority 1: Check User Data directory (e.g. %APPDATA%/BriefingOS/credentials.json)
-    // This allows users to easily drop their own credentials file.
+    // Priority 1: User Data directory (e.g. %APPDATA%/Email Briefing/credentials.json)
     const userDataPath = path.join(app.getPath('userData'), 'credentials.json');
-
-    // Priority 2: Check App Bundle (fallback for dev or bundled builds)
+    // Priority 2: App bundle (dev fallback)
     const appPath = path.join(app.getAppPath(), 'credentials.json');
 
     let credentialsPath = '';
@@ -160,7 +176,6 @@ function initializeOAuth() {
             const credentials = JSON.parse(fs.readFileSync(credentialsPath, 'utf8'));
             const { client_id, client_secret, redirect_uris } = credentials.installed || credentials.web;
 
-            // Use the first redirect URI from credentials
             currentRedirectUri = redirect_uris?.[0] || 'http://localhost:3000/oauth2callback';
 
             oauth2Client = new google.auth.OAuth2(
@@ -169,7 +184,6 @@ function initializeOAuth() {
                 currentRedirectUri
             );
 
-            // Restore saved tokens
             const savedTokens = store.get('googleTokens');
             if (savedTokens) {
                 oauth2Client.setCredentials(savedTokens);
@@ -183,10 +197,9 @@ function initializeOAuth() {
 }
 
 // ============================================
-// IPC HANDLERS
+// BASIC IPC HANDLERS
 // ============================================
 
-// Check authentication status
 ipcMain.handle('check-auth-status', async () => {
     const apiKey = store.get('cohereApiKey') || process.env.COHERE_API_KEY;
     const tokens = store.get('googleTokens');
@@ -197,61 +210,46 @@ ipcMain.handle('check-auth-status', async () => {
     };
 });
 
-// Get briefing history
 ipcMain.handle('get-history', async () => {
     return store.get('briefingHistory') || [];
 });
 
-// Clear briefing history
 ipcMain.handle('clear-history', async () => {
     store.set('briefingHistory', []);
     console.log('[History] Cleared all history');
 });
 
-// Get accessibility settings
 ipcMain.handle('get-settings', async () => {
-    return store.get('accessibilitySettings') || {
-        accentColor: '#06b6d4',
-        fontSize: 100,
-        animationsEnabled: true,
-        backgroundMode: 'simple'
-    };
+    const saved = store.get('accessibilitySettings') || {};
+    return { ...DEFAULT_SETTINGS, ...saved };
 });
 
-// Save accessibility settings
 ipcMain.handle('set-settings', async (_, settings: any) => {
     store.set('accessibilitySettings', settings);
-    console.log('[Settings] Saved accessibility settings');
 });
 
-// Get Cohere API key type (trial vs production)
 ipcMain.handle('get-cohere-key-type', async () => {
-    return store.get('cohereKeyType') || 'trial'; // Default to trial for safety
+    return store.get('cohereKeyType') || 'trial';
 });
 
-// Set Cohere API key type
 ipcMain.handle('set-cohere-key-type', async (_, keyType: 'trial' | 'production') => {
     store.set('cohereKeyType', keyType);
     console.log(`[Settings] Cohere key type set to: ${keyType}`);
 });
 
-// Set Cohere API Key
 ipcMain.handle('set-api-key', async (_, key: string) => {
     store.set('cohereApiKey', key);
 });
 
-// Get Cohere API Key
 ipcMain.handle('get-api-key', async () => {
     const key = store.get('cohereApiKey') || process.env.COHERE_API_KEY;
     if (!key) return null;
-    // Return masked key for UI display (e.g. sk-....1234)
     if (key.length > 8) {
         return `${key.substring(0, 3)}...${key.substring(key.length - 4)}`;
     }
     return '********';
 });
 
-// Google Sign In
 ipcMain.handle('sign-in-google', async () => {
     if (!oauth2Client) {
         return {
@@ -267,22 +265,14 @@ ipcMain.handle('sign-in-google', async () => {
             prompt: 'consent',
         });
 
-        // Open browser for authentication
         await shell.openExternal(authUrl);
 
-        // Dynamic Server Configuration
         const urlObj = new URL(currentRedirectUri);
         const port = parseInt(urlObj.port || '80');
         const pathname = urlObj.pathname || '/oauth2callback';
 
         console.log(`OAuth Server starting. Expecting callback at: ${currentRedirectUri}`);
-        console.log(`Listening on Port: ${port}, Path: ${pathname}`);
 
-        if (port === 80) {
-            console.warn('WARNING: Using port 80 for OAuth callback. This requires admin privileges or might fail. We recommend using http://localhost:3000/oauth2callback in Google Console.');
-        }
-
-        // Create a simple local server to receive the callback
         const http = await import('http');
         const url = await import('url');
 
@@ -301,10 +291,10 @@ ipcMain.handle('sign-in-google', async () => {
                             res.writeHead(200, { 'Content-Type': 'text/html' });
                             res.end(`
                 <html>
-                  <body style="font-family: Inter, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #1a1a2e; color: white;">
+                  <body style="font-family: Inter, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #0b0b16; color: white;">
                     <div style="text-align: center;">
-                      <h1>✅ Authentication Successful!</h1>
-                      <p>You can close this window and return to BriefingOS.</p>
+                      <h1>&#9989; Authentication Successful!</h1>
+                      <p>You can close this window and return to Email Briefing.</p>
                       <script>
                         setTimeout(() => window.close(), 2000);
                       </script>
@@ -340,7 +330,6 @@ ipcMain.handle('sign-in-google', async () => {
                 console.log(`OAuth callback server listening on port ${port}`);
             });
 
-            // Timeout after 5 minutes
             setTimeout(() => {
                 server.close();
                 resolve({ success: false, error: 'Authentication timed out' });
@@ -351,7 +340,6 @@ ipcMain.handle('sign-in-google', async () => {
     }
 });
 
-// Sign out
 ipcMain.handle('sign-out', async () => {
     store.delete('googleTokens');
     if (oauth2Client) {
@@ -359,24 +347,537 @@ ipcMain.handle('sign-out', async () => {
     }
 });
 
-// Open external URL
 ipcMain.handle('open-external', async (_, url: string) => {
-    await shell.openExternal(url);
+    if (/^https?:\/\//i.test(url)) {
+        await shell.openExternal(url);
+    }
 });
+
+// ============================================
+// FREE SEARCH TOOL (DuckDuckGo HTML + Wikipedia)
+// No API keys required.
+// ============================================
+
+async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 12000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, {
+            ...options,
+            signal: controller.signal,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+                ...(options.headers || {}),
+            },
+        });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function decodeHtmlEntities(text: string): string {
+    return text
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#x27;/g, "'")
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ');
+}
+
+function stripTags(html: string): string {
+    return decodeHtmlEntities(html.replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+}
+
+async function searchDuckDuckGo(query: string, maxResults = 5): Promise<SearchSource[]> {
+    try {
+        const res = await fetchWithTimeout(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`);
+        if (!res.ok) {
+            console.warn(`[Search] DuckDuckGo returned ${res.status} for "${query}"`);
+            return [];
+        }
+        const html = await res.text();
+
+        const results: SearchSource[] = [];
+        const titleRegex = /class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+        const snippetRegex = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+
+        const titles: Array<{ url: string; title: string }> = [];
+        let m: RegExpExecArray | null;
+        while ((m = titleRegex.exec(html)) !== null && titles.length < maxResults + 3) {
+            let href = decodeHtmlEntities(m[1]);
+            // DDG wraps URLs: //duckduckgo.com/l/?uddg=<encoded>&rut=...
+            const uddgMatch = href.match(/[?&]uddg=([^&]+)/);
+            if (uddgMatch) {
+                try { href = decodeURIComponent(uddgMatch[1]); } catch { /* keep raw */ }
+            }
+            if (href.startsWith('//')) href = 'https:' + href;
+            titles.push({ url: href, title: stripTags(m[2]) });
+        }
+
+        const snippets: string[] = [];
+        while ((m = snippetRegex.exec(html)) !== null && snippets.length < maxResults + 3) {
+            snippets.push(stripTags(m[1]));
+        }
+
+        for (let i = 0; i < titles.length && results.length < maxResults; i++) {
+            const t = titles[i];
+            if (!t.url.startsWith('http')) continue;
+            // Skip ad redirects
+            if (t.url.includes('duckduckgo.com/y.js')) continue;
+            results.push({
+                title: t.title,
+                url: t.url,
+                snippet: snippets[i] || '',
+                engine: 'duckduckgo',
+            });
+        }
+        console.log(`[Search] DuckDuckGo "${query}" -> ${results.length} results`);
+        return results;
+    } catch (error: any) {
+        console.warn(`[Search] DuckDuckGo failed for "${query}": ${error.message}`);
+        return [];
+    }
+}
+
+interface WikiResult {
+    source?: SearchSource;
+    image?: DashboardImage;
+}
+
+async function searchWikipedia(query: string): Promise<WikiResult> {
+    try {
+        const searchRes = await fetchWithTimeout(
+            `https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=1&namespace=0&format=json`
+        );
+        if (!searchRes.ok) return {};
+        const searchData: any = await searchRes.json();
+        const title = searchData?.[1]?.[0];
+        if (!title) return {};
+
+        const summaryRes = await fetchWithTimeout(
+            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`
+        );
+        if (!summaryRes.ok) return {};
+        const summary: any = await summaryRes.json();
+
+        const result: WikiResult = {};
+        if (summary?.extract) {
+            result.source = {
+                title: `Wikipedia: ${summary.title || title}`,
+                url: summary?.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`,
+                snippet: String(summary.extract).substring(0, 600),
+                engine: 'wikipedia',
+            };
+        }
+        const thumb = summary?.originalimage?.source || summary?.thumbnail?.source;
+        if (thumb) {
+            result.image = {
+                url: thumb,
+                title: summary.title || title,
+                sourceUrl: summary?.content_urls?.desktop?.page,
+                provider: 'wikipedia',
+            };
+        }
+        console.log(`[Search] Wikipedia "${query}" -> ${result.source ? 'summary' : 'none'}${result.image ? ' + image' : ''}`);
+        return result;
+    } catch (error: any) {
+        console.warn(`[Search] Wikipedia failed for "${query}": ${error.message}`);
+        return {};
+    }
+}
+
+// ============================================
+// FREE IMAGE TOOL (Openverse — no API key)
+// ============================================
+
+async function searchOpenverseImages(query: string, maxResults = 4): Promise<DashboardImage[]> {
+    try {
+        const res = await fetchWithTimeout(
+            `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${maxResults + 4}&mature=false`
+        );
+        if (!res.ok) {
+            console.warn(`[Images] Openverse returned ${res.status} for "${query}"`);
+            return [];
+        }
+        const data: any = await res.json();
+        const images: DashboardImage[] = [];
+        for (const item of data?.results || []) {
+            if (images.length >= maxResults) break;
+            const url = item?.thumbnail || item?.url;
+            if (!url || !String(url).startsWith('http')) continue;
+            images.push({
+                url: String(url),
+                title: item?.title || undefined,
+                sourceUrl: item?.foreign_landing_url || undefined,
+                provider: 'openverse',
+            });
+        }
+        console.log(`[Images] Openverse "${query}" -> ${images.length} images`);
+        return images;
+    } catch (error: any) {
+        console.warn(`[Images] Openverse failed for "${query}": ${error.message}`);
+        return [];
+    }
+}
+
+// ============================================
+// EMAIL BODY EXTRACTION & CLEANING
+// ============================================
+
+const htmlToTextOptions = {
+    wordwrap: false as const,
+    preserveNewlines: false as const,
+    selectors: [
+        { selector: 'a', options: { ignoreHref: true } },
+        { selector: 'img', format: 'skip' },
+        { selector: 'script', format: 'skip' },
+        { selector: 'style', format: 'skip' },
+        { selector: 'meta', format: 'skip' },
+        { selector: 'link', format: 'skip' },
+        { selector: 'noscript', format: 'skip' },
+        { selector: 'nav', format: 'skip' },
+        { selector: 'header', format: 'skip' },
+        { selector: 'footer', format: 'skip' },
+        { selector: 'aside', format: 'skip' },
+        { selector: '[class*="unsubscribe"]', format: 'skip' },
+        { selector: '[class*="advertisement"]', format: 'skip' },
+        { selector: '[style*="display:none"]', format: 'skip' },
+        { selector: '[style*="display: none"]', format: 'skip' },
+        { selector: '[hidden]', format: 'skip' },
+    ]
+};
+
+// Recursively walk MIME parts to find text/plain and text/html bodies.
+// Nested multipart structures (multipart/mixed > multipart/alternative > text/*)
+// are common; a single-level scan misses them.
+function extractMimeBodies(payload: any): { plain: string; html: string } {
+    let plain = '';
+    let html = '';
+
+    const walk = (part: any) => {
+        if (!part) return;
+        if (part.body?.data) {
+            try {
+                const content = Buffer.from(part.body.data, 'base64').toString('utf8');
+                if (part.mimeType === 'text/plain') plain += content + '\n';
+                else if (part.mimeType === 'text/html') html += content + '\n';
+            } catch { /* skip malformed part */ }
+        }
+        if (Array.isArray(part.parts)) {
+            for (const child of part.parts) walk(child);
+        }
+    };
+
+    walk(payload);
+    return { plain, html };
+}
+
+function hasHtmlTags(content: string): boolean {
+    return /<[a-z][\s\S]*>/i.test(content);
+}
+
+function cleanEmailBody(raw: string): string {
+    let body = hasHtmlTags(raw) ? convert(raw, htmlToTextOptions) : raw;
+
+    // Remove quoted replies
+    body = body.split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
+
+    // Remove zero-width/invisible Unicode and control characters
+    body = body.replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u061C\u2060-\u206F\u3164\uFFA0]/g, '');
+    body = body.replace(/[\uFE00-\uFE0F]/g, '');
+    body = body.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+    // Remove URLs and bare email addresses (senders are tracked separately)
+    body = body.replace(/https?:\/\/[^\s\)\]\}]+/gi, '');
+    body = body.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '');
+
+    // Remove common boilerplate PHRASES only (not standalone words, so real
+    // content mentioning e.g. "LinkedIn" survives)
+    body = body.replace(/\b(unsubscribe( here)?|view (this email )?in( your)? browser|view online|open in app|manage (your )?preferences|update (your )?preferences|email preferences|forward to a friend|add us to your address book|was this email forwarded( to you)?|having trouble viewing|view as webpage|you( are)? receiv(ed|ing) this (email|message)|this email was sent to|if you no longer wish to receive|to unsubscribe|opt[- ]out|all rights reserved|privacy policy|terms of service|terms & conditions|copyright ©)\b[^\n]*/gi, '');
+    body = body.replace(/\b(follow|like|join|find|connect with) us on [^\n.]{0,40}/gi, '');
+
+    // Remove markdown image leftovers
+    body = body.replace(/!\[.*?\]\(.*?\)/g, '');
+    body = body.replace(/\[image:.*?\]/gi, '');
+
+    // Remove decorative runs
+    body = body.replace(/[\*\#\^\~\`]{2,}/g, '');
+    body = body.replace(/[-=_]{4,}/g, '');
+
+    // Normalize whitespace
+    body = body.replace(/\t/g, ' ');
+    body = body.replace(/[ ]{2,}/g, ' ');
+    body = body.replace(/\n[ ]+/g, '\n');
+    body = body.replace(/[ ]+\n/g, '\n');
+    body = body.replace(/\n{3,}/g, '\n\n');
+
+    // Drop lines that are pure punctuation
+    body = body.split('\n').filter(line => {
+        const trimmed = line.trim();
+        if (trimmed.length === 0) return true; // keep paragraph breaks
+        if (trimmed.length < 3) return false;
+        if (/^[\s\.\,\|\-\*\#\:\;\!\?\&\@\$\%\^\(\)\[\]\{\}\/\\]+$/.test(trimmed)) return false;
+        return true;
+    }).join('\n');
+
+    return body.trim();
+}
+
+function truncateAtBoundary(text: string, limit: number): string {
+    if (text.length <= limit) return text;
+    let truncated = text.substring(0, limit);
+    const lastPeriod = truncated.lastIndexOf('.');
+    const lastNewline = truncated.lastIndexOf('\n');
+    const cutPoint = Math.max(lastPeriod, lastNewline);
+    if (cutPoint > limit - 500) {
+        truncated = truncated.substring(0, cutPoint + 1);
+    }
+    return truncated.trim();
+}
+
+// ============================================
+// LLM HELPERS (LangChain + Cohere best practices)
+// ============================================
+
+// Cohere's Command models respond most reliably to JSON tasks when:
+//  - the system preamble uses clear markdown sections (## Task, ## Output Format)
+//  - the exact JSON schema is shown, with types, in a fenced block
+//  - the instruction "Output ONLY the JSON object" appears at the END of the user turn
+//  - temperature is low (0.2-0.3) for extraction/structuring tasks
+// We validate with Zod and retry once with the validation error appended,
+// which fixes the vast majority of malformed generations.
+
+function extractJsonObject(text: string): any {
+    let t = text.trim();
+    // Strip markdown fences
+    t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    // Slice from first { to last }
+    const first = t.indexOf('{');
+    const last = t.lastIndexOf('}');
+    if (first === -1 || last <= first) {
+        throw new Error('No JSON object found in model response');
+    }
+    t = t.slice(first, last + 1);
+    return JSON.parse(t);
+}
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+        )
+    ]);
+}
+
+interface InvokeOptions {
+    timeoutMs: number;
+    maxRetries: number;
+    label: string;
+}
+
+async function invokeStructured<T>(
+    model: ChatCohere,
+    systemPrompt: string,
+    userPrompt: string,
+    schema: { parse: (data: unknown) => T },
+    opts: InvokeOptions
+): Promise<T> {
+    let correctionNote = '';
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= opts.maxRetries; attempt++) {
+        const start = Date.now();
+        try {
+            const messages = [
+                new SystemMessage(systemPrompt),
+                new HumanMessage(correctionNote ? `${userPrompt}\n\n${correctionNote}` : userPrompt),
+            ];
+
+            const response = await withTimeout(
+                model.invoke(messages),
+                opts.timeoutMs,
+                `Request timed out after ${opts.timeoutMs / 1000}s`
+            );
+
+            const rawText = response.content.toString();
+            const parsed = extractJsonObject(rawText);
+            const validated = schema.parse(parsed);
+            console.log(`[AI:${opts.label}] OK in ${((Date.now() - start) / 1000).toFixed(1)}s (attempt ${attempt})`);
+            return validated;
+        } catch (error: any) {
+            lastError = error;
+            const message = error?.message || String(error);
+            const lower = message.toLowerCase();
+            const isFormatError = error instanceof z.ZodError || lower.includes('json');
+            const isRetryable = isFormatError
+                || lower.includes('429') || lower.includes('rate limit')
+                || lower.includes('timeout') || lower.includes('timed out')
+                || /5\d\d/.test(String(error?.response?.status || ''));
+
+            console.warn(`[AI:${opts.label}] Attempt ${attempt}/${opts.maxRetries} failed: ${message.substring(0, 200)}`);
+
+            if (attempt >= opts.maxRetries || !isRetryable) break;
+
+            if (isFormatError) {
+                const detail = error instanceof z.ZodError
+                    ? JSON.stringify(error.issues.slice(0, 3))
+                    : message.substring(0, 200);
+                correctionNote = `IMPORTANT: Your previous response was not valid JSON matching the schema (error: ${detail}). Respond again with ONLY the corrected JSON object — no prose, no markdown fences.`;
+            } else {
+                await sleep(2000 * Math.pow(2, attempt - 1) + Math.random() * 1000);
+            }
+        }
+    }
+    throw lastError || new Error(`${opts.label} failed`);
+}
+
+// ============================================
+// DASHBOARD TEMPLATES
+// ============================================
+
+interface TemplateSpec {
+    id: DashboardTemplate;
+    name: string;
+    guidance: string;
+}
+
+const TEMPLATE_SPECS: TemplateSpec[] = [
+    {
+        id: 'pulse',
+        name: 'Pulse Board',
+        guidance: 'A metrics-first dashboard. REQUIRED: 4-6 "stats" (numbers, percentages, dates, counts — pulled from the emails or web results), 5-8 "key_points", 2-4 "web_context" entries. Include "action_items" if the emails imply any follow-ups.',
+    },
+    {
+        id: 'editorial',
+        name: 'Editorial',
+        guidance: 'A magazine-style deep read. REQUIRED: a rich 3-5 sentence "overview", 2-3 "quotes" (verbatim or lightly-edited quotes from the emails/web results, with attribution), 4-6 "key_points", 3-5 "glossary" terms explaining jargon. Include 2-3 "web_context" entries for background.',
+    },
+    {
+        id: 'timeline',
+        name: 'Chronicle',
+        guidance: 'A chronological view of how this topic is developing. REQUIRED: 4-7 "timeline" entries (label = date or phase like "Earlier this week" / "Next month", text = what happened or will happen), 4-6 "key_points", 2-4 "stats". Order timeline oldest to newest.',
+    },
+    {
+        id: 'spotlight',
+        name: 'Spotlight',
+        guidance: 'A hero-story layout focused on the single most important development. REQUIRED: a strong 3-4 sentence "overview", 3-6 "action_items" (what a reader should do, watch, or decide), 4-6 "key_points", one "fun_fact". Include 2-3 "web_context" entries.',
+    },
+    {
+        id: 'matrix',
+        name: 'Matrix',
+        guidance: 'A dense facts grid for fast scanning. REQUIRED: 8-12 short "key_points" (each under 25 words, each with a "tag" like "Launch", "Funding", "Risk", "Deal"), 4-6 "stats", 3-5 "glossary" terms. Keep everything terse.',
+    },
+];
+
+// ============================================
+// PROMPTS
+// ============================================
+
+const TOPIC_PLAN_SYSTEM = `You are the planning engine of an email-briefing application.
+
+## Task
+You receive a numbered list of emails (subject, sender, content preview). Group them into distinct TOPICS. Emails about the same subject matter MUST share one topic (e.g. two newsletters covering the same product launch). An email covering several unrelated stories should be assigned to the topic of its dominant story.
+
+## Rules
+- Create between 1 and 8 topics. Every email index must appear in exactly one topic.
+- "title": a short, specific topic title (3-8 words). Not a vague label — name the actual subject.
+- "category": one of "Tech", "Markets", "World", "AI", "Business", "Science", "Politics", "Health", "Culture", "General".
+- "icon": one emoji that fits the topic.
+- "search_queries": 1-3 web search queries that would surface CURRENT context for this topic. Make them specific (names, products, events), not generic.
+- "image_query": a short 2-4 word visual query for finding a representative image (e.g. "OpenAI logo", "stock market chart", "SpaceX rocket launch").
+
+## Output Format
+Output ONLY a JSON object, no markdown fences, no commentary:
+{
+  "topics": [
+    {
+      "title": "string",
+      "category": "string",
+      "icon": "emoji",
+      "email_indexes": [0, 3],
+      "search_queries": ["query one", "query two"],
+      "image_query": "short visual query"
+    }
+  ]
+}`;
+
+function buildDashboardSystemPrompt(template: TemplateSpec): string {
+    return `You are a professional research analyst producing a TOPIC DASHBOARD for an executive briefing application.
+
+## Task
+You receive: (1) the full content of one or more emails about a single topic, and (2) numbered web search results providing outside context. Synthesize BOTH into a rich, factual dashboard.
+
+## Template: "${template.name}"
+${template.guidance}
+
+## Content Rules
+- Be professional, precise, and information-dense. No filler, no hype.
+- Ground every claim in the emails or the numbered search results. NEVER invent statistics, quotes, dates, or names.
+- "stats" values must be real figures found in the source material. If a figure is approximate, prefix with "~". If you cannot find enough real figures, return fewer stats — do not fabricate.
+- "web_context" entries must come from the search results; set "source_index" to the matching result number.
+- Mark promotional/sponsored content with "is_sponsored": true on that key point.
+- Highlighting: wrap the 1-2 most important phrases in each "overview" and each "key_points" text in ==double equals== (e.g. "The company raised ==$40M Series B== led by..."). Use sparingly.
+- "sentiment": overall sentiment of this topic for the reader ("Positive", "Negative", or "Neutral").
+
+## Output Format
+Output ONLY a JSON object with this exact shape (omit optional arrays you have no content for, or use []):
+{
+  "headline": "string — punchy one-line headline",
+  "overview": "string — 2-5 sentence synthesis of the topic",
+  "sentiment": "Positive" | "Negative" | "Neutral",
+  "stats": [{ "label": "string", "value": "string", "context": "string (optional)" }],
+  "key_points": [{ "text": "string", "tag": "string (optional)", "is_sponsored": false }],
+  "timeline": [{ "label": "string", "text": "string" }],
+  "quotes": [{ "text": "string", "attribution": "string (optional)" }],
+  "action_items": ["string"],
+  "glossary": [{ "term": "string", "definition": "string" }],
+  "web_context": [{ "title": "string", "text": "string", "source_index": 1 }],
+  "fun_fact": "string (optional)"
+}`;
+}
 
 // ============================================
 // MAIN BRIEFING PIPELINE
 // ============================================
 
+interface EmailData {
+    id: string;
+    subject: string;
+    from: string;
+    body: string;
+    ref: EmailRef;
+}
+
+function parseSender(from: string): EmailRef {
+    const senderMatch = from.match(/^(.+?)\s*<(.+?)>$/);
+    if (senderMatch) {
+        return {
+            subject: '',
+            senderName: senderMatch[1].replace(/"/g, '').trim(),
+            senderEmail: senderMatch[2].trim(),
+        };
+    }
+    return { subject: '', senderName: from, senderEmail: from };
+}
+
+function sendProgress(stage: string, message: string, current: number, total: number) {
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    mainWindow?.webContents.send('briefing-progress', { stage, message, current, total, percent });
+}
+
 ipcMain.handle('fetch-briefing', async () => {
     try {
-        // Check API key
         const apiKey = store.get('cohereApiKey') || process.env.COHERE_API_KEY;
         if (!apiKey) {
             return { success: false, error: 'Cohere API key not configured. Please add it in settings.' };
         }
 
-        // Check Google auth
         const tokens = store.get('googleTokens');
         if (!tokens?.access_token || !oauth2Client) {
             return { success: false, error: 'Please sign in with Google first.' };
@@ -385,12 +886,10 @@ ipcMain.handle('fetch-briefing', async () => {
         oauth2Client.setCredentials(tokens);
 
         // ========== STEP 1: FETCH EMAILS ==========
+        sendProgress('emails', 'Fetching your inbox...', 0, 1);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Build query for ANY email in Inbox (read or unread)
         const query = `label:inbox -label:trash -label:spam`;
-        console.log('Fetching emails with query:', query);
-
         const listResponse = await gmail.users.messages.list({
             userId: 'me',
             q: query,
@@ -398,27 +897,21 @@ ipcMain.handle('fetch-briefing', async () => {
         });
 
         const messages = listResponse.data.messages || [];
-
         if (messages.length === 0) {
             return {
                 success: false,
-                error: 'No emails found in your Inbox. Please check if your Inbox is empty.',
+                error: 'No emails found in your Inbox.',
                 emailCount: 0
             };
         }
 
-        // ========== STEP 2: FETCH EMAIL BODIES ==========
-        interface EmailData {
-            id: string;
-            subject: string;
-            from: string;
-            body: string;
-        }
-
+        // ========== STEP 2: EXTRACT EMAIL BODIES ==========
         const emails: EmailData[] = [];
-        const MAX_EMAIL_SIZE = 100 * 1024; // 100KB limit per email
+        const toFetch = messages.slice(0, 15);
 
-        for (const message of messages.slice(0, 15)) { // Limit to 15 emails for speed
+        for (let i = 0; i < toFetch.length; i++) {
+            const message = toFetch[i];
+            sendProgress('emails', 'Reading emails...', i + 1, toFetch.length);
             try {
                 const emailResponse = await gmail.users.messages.get({
                     userId: 'me',
@@ -430,195 +923,36 @@ ipcMain.handle('fetch-briefing', async () => {
                 const subject = headers.find(h => h.name?.toLowerCase() === 'subject')?.value || 'No Subject';
                 const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value || 'Unknown';
 
-                // Extract body content
+                const { plain, html } = extractMimeBodies(emailResponse.data.payload);
+
+                // Prefer plain text when substantial, else fall back to converted HTML
                 let body = '';
-                const payload = emailResponse.data.payload;
-
-                // ========== AGGRESSIVE HTML-TO-TEXT CONVERSION ==========
-                // These selectors strip out junk that inflates token counts
-                const htmlToTextOptions = {
-                    wordwrap: false as const,
-                    preserveNewlines: false as const,
-                    selectors: [
-                        // Skip links but keep link text
-                        { selector: 'a', options: { ignoreHref: true } },
-                        // Skip all images (tracking pixels, logos, etc.)
-                        { selector: 'img', format: 'skip' },
-                        // Skip scripts, styles, metadata
-                        { selector: 'script', format: 'skip' },
-                        { selector: 'style', format: 'skip' },
-                        { selector: 'meta', format: 'skip' },
-                        { selector: 'link', format: 'skip' },
-                        { selector: 'noscript', format: 'skip' },
-                        // Skip navigation and layout elements
-                        { selector: 'nav', format: 'skip' },
-                        { selector: 'header', format: 'skip' },
-                        { selector: 'footer', format: 'skip' },
-                        { selector: 'aside', format: 'skip' },
-                        // Skip social media sections
-                        { selector: '[class*="social"]', format: 'skip' },
-                        { selector: '[class*="share"]', format: 'skip' },
-                        { selector: '[class*="footer"]', format: 'skip' },
-                        { selector: '[class*="unsubscribe"]', format: 'skip' },
-                        { selector: '[class*="header"]', format: 'skip' },
-                        { selector: '[class*="nav"]', format: 'skip' },
-                        { selector: '[class*="menu"]', format: 'skip' },
-                        { selector: '[class*="sidebar"]', format: 'skip' },
-                        { selector: '[class*="advertisement"]', format: 'skip' },
-                        { selector: '[class*="promo"]', format: 'skip' },
-                        { selector: '[class*="banner"]', format: 'skip' },
-                        // Skip hidden elements
-                        { selector: '[style*="display:none"]', format: 'skip' },
-                        { selector: '[style*="display: none"]', format: 'skip' },
-                        { selector: '[hidden]', format: 'skip' },
-                        // Skip buttons (usually CTAs)
-                        { selector: 'button', format: 'skip' },
-                    ]
-                };
-
-                // Track sizes at each stage for clear logging
-                let rawHtmlSize = 0;
-                let afterHtmlToTextSize = 0;
-                let afterRegexCleanSize = 0;
-                let finalSize = 0;
-
-                // Helper to detect if content has HTML tags
-                const hasHtmlTags = (content: string): boolean => {
-                    return /<[a-z][\s\S]*>/i.test(content);
-                };
-
-                // Helper to clean content (always run HTML-to-text if HTML detected)
-                const cleanHtml = (content: string): string => {
-                    if (hasHtmlTags(content)) {
-                        return convert(content, htmlToTextOptions);
-                    }
-                    return content;
-                };
-
-                if (payload?.body?.data) {
-                    const rawContent = Buffer.from(payload.body.data, 'base64').toString('utf8');
-                    rawHtmlSize = rawContent.length;
-                    body = cleanHtml(rawContent);
-                    afterHtmlToTextSize = body.length;
-                } else if (payload?.parts) {
-                    // Prefer text/plain, but fall back to text/html
-                    let plainText = '';
-                    let htmlContent = '';
-
-                    for (const part of payload.parts) {
-                        if (part.mimeType === 'text/plain' && part.body?.data) {
-                            plainText = Buffer.from(part.body.data, 'base64').toString('utf8');
-                        } else if (part.mimeType === 'text/html' && part.body?.data) {
-                            htmlContent = Buffer.from(part.body.data, 'base64').toString('utf8');
-                        }
-                    }
-
-                    // Use plain text if available, but ALWAYS clean it in case it has HTML fragments
-                    if (plainText) {
-                        rawHtmlSize = plainText.length;
-                        body = cleanHtml(plainText);
-                        afterHtmlToTextSize = body.length;
-                    } else if (htmlContent) {
-                        rawHtmlSize = htmlContent.length;
-                        body = cleanHtml(htmlContent);
-                        afterHtmlToTextSize = body.length;
-                    }
+                const cleanedPlain = plain ? cleanEmailBody(plain) : '';
+                if (cleanedPlain.length > 200) {
+                    body = cleanedPlain;
+                } else if (html) {
+                    body = cleanEmailBody(html);
+                    if (body.length < cleanedPlain.length) body = cleanedPlain;
+                } else {
+                    body = cleanedPlain;
                 }
 
-                if (body) {
-                    // ========== AGGRESSIVE POST-PROCESSING ==========
+                // Last-resort fallback: Gmail's own snippet, so a scrape failure
+                // never silently drops an email from the briefing
+                if (body.trim().length < 80 && emailResponse.data.snippet) {
+                    body = decodeHtmlEntities(emailResponse.data.snippet);
+                    console.warn(`[Email] Body extraction thin for "${subject}"; using Gmail snippet fallback`);
+                }
 
-                    // Remove quoted replies (lines starting with >)
-                    body = body.split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
+                body = truncateAtBoundary(body, 12000);
 
-                    // Remove zero-width characters and invisible Unicode (common in email spam/tracking)
-                    body = body.replace(/[\u200B-\u200D\uFEFF\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180D\u2060-\u206F\u3164\uFFA0]/g, '');
-                    // Remove variation selectors
-                    body = body.replace(/[\uFE00-\uFE0F]/g, '');
-                    // Remove other problematic Unicode ranges (emojis modifiers, combining marks, etc.)
-                    body = body.replace(/[\u0300-\u036F]/g, ''); // Combining diacritical marks
-                    body = body.replace(/[\u1AB0-\u1AFF]/g, ''); // Combining diacritical marks extended
-                    body = body.replace(/[\u1DC0-\u1DFF]/g, ''); // Combining diacritical marks supplement
-                    body = body.replace(/[\uFE20-\uFE2F]/g, ''); // Combining half marks
-                    // Remove control characters (except newlines and tabs)
-                    body = body.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-
-                    // Remove URLs (http/https links)
-                    body = body.replace(/https?:\/\/[^\s\)\]\}]+/gi, '');
-
-                    // Remove email addresses (except in From field which we track separately)
-                    body = body.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '');
-
-                    // Remove common email boilerplate
-                    body = body.replace(/Unsubscribe|View in browser|View online|Open in app|Copyright ©|All rights reserved|Privacy Policy|Terms of Service|Terms & Conditions|Manage preferences|Update preferences|Email preferences|Click here|Read more|Learn more|See more|View more|Read online|Sent to:|You received this|This email was sent|If you no longer wish|To unsubscribe|Opt out|Forward to a friend|Add us to your address book|Was this email forwarded|Having trouble viewing|View as webpage/gi, '');
-
-                    // Remove social media mentions
-                    body = body.replace(/Follow us on|Like us on|Connect with us|Join us on|Find us on|Twitter|Facebook|Instagram|LinkedIn|YouTube|TikTok/gi, '');
-
-                    // Remove phone numbers
-                    body = body.replace(/\+?[\d\s\-\(\)]{10,}/g, '');
-
-                    // Remove markdown image syntax leftovers
-                    body = body.replace(/!\[.*?\]\(.*?\)/g, '');
-                    body = body.replace(/\[image:.*?\]/gi, '');
-                    body = body.replace(/View image:.*$/gm, '');
-
-                    // Remove excessive special characters and formatting
-                    body = body.replace(/[\*\#\^\~\`]{2,}/g, '');
-                    body = body.replace(/[-=_]{3,}/g, '');
-
-                    // Normalize whitespace
-                    body = body.replace(/\t/g, ' ');
-                    body = body.replace(/[ ]{2,}/g, ' ');
-                    body = body.replace(/\n[ ]+/g, '\n');
-                    body = body.replace(/[ ]+\n/g, '\n');
-                    body = body.replace(/\n{3,}/g, '\n\n');
-
-                    // Remove lines that are just punctuation or very short (likely formatting)
-                    body = body.split('\n').filter(line => {
-                        const trimmed = line.trim();
-                        if (trimmed.length < 3) return false;
-                        if (/^[\s\.\,\|\-\*\#\:\;\!\?\&\@\$\%\^\(\)\[\]\{\}\/\\]+$/.test(trimmed)) return false;
-                        return true;
-                    }).join('\n');
-
-                    body = body.trim();
-                    afterRegexCleanSize = body.length;
-
-                    // ========== SMART TRUNCATION (after cleaning) ==========
-                    const CLEAN_LIMIT = 15000; // 15k chars - generous limit, Cohere has 128k context
-                    let truncatedAmount = 0;
-                    if (body.length > CLEAN_LIMIT) {
-                        // Try to truncate at a sentence boundary
-                        let truncated = body.substring(0, CLEAN_LIMIT);
-                        const lastPeriod = truncated.lastIndexOf('.');
-                        const lastNewline = truncated.lastIndexOf('\n');
-                        const cutPoint = Math.max(lastPeriod, lastNewline, CLEAN_LIMIT - 500);
-                        if (cutPoint > CLEAN_LIMIT - 500) {
-                            truncated = truncated.substring(0, cutPoint + 1);
-                        }
-                        truncatedAmount = body.length - truncated.length;
-                        body = truncated.trim();
-                    }
-                    finalSize = body.length;
-
-                    if (body.trim().length > 100) {
-                        emails.push({ id: message.id!, subject, from, body });
-
-                        // Clear, detailed logging
-                        const htmlJunkRemoved = rawHtmlSize - afterHtmlToTextSize;
-                        const regexJunkRemoved = afterHtmlToTextSize - afterRegexCleanSize;
-                        const totalJunkRemoved = htmlJunkRemoved + regexJunkRemoved;
-
-                        console.log(`[Email ${emails.length}] "${subject.substring(0, 55)}..."`);
-                        console.log(`  ├─ Raw HTML:        ${rawHtmlSize.toLocaleString().padStart(7)} chars`);
-                        console.log(`  ├─ After HTML→Text: ${afterHtmlToTextSize.toLocaleString().padStart(7)} chars (removed ${htmlJunkRemoved.toLocaleString()} HTML/CSS/tags)`);
-                        console.log(`  ├─ After Regex:     ${afterRegexCleanSize.toLocaleString().padStart(7)} chars (removed ${regexJunkRemoved.toLocaleString()} URLs/boilerplate)`);
-                        if (truncatedAmount > 0) {
-                            console.log(`  ├─ After Truncate:  ${finalSize.toLocaleString().padStart(7)} chars (cut ${truncatedAmount.toLocaleString()} to fit 15k limit)`);
-                        }
-                        console.log(`  └─ FINAL: ${rawHtmlSize.toLocaleString()} → ${finalSize.toLocaleString()} chars (${Math.round((1 - finalSize / rawHtmlSize) * 100)}% total reduction)`);
-                    }
+                if (body.trim().length >= 40) {
+                    const ref = parseSender(from);
+                    ref.subject = subject;
+                    emails.push({ id: message.id!, subject, from, body, ref });
+                    console.log(`[Email ${emails.length}] "${subject.substring(0, 60)}" — ${body.length} chars`);
+                } else {
+                    console.warn(`[Email] Skipped "${subject}" — no usable content`);
                 }
             } catch (error) {
                 console.error(`Failed to fetch email ${message.id}:`, error);
@@ -633,304 +967,208 @@ ipcMain.handle('fetch-briefing', async () => {
             };
         }
 
-        console.log(`[Pipeline] Fetched ${emails.length} emails. Starting parallel summarization...`);
+        // ========== STEP 3: TOPIC CLUSTERING ==========
+        const cohereKeyType = store.get('cohereKeyType') || 'trial';
+        const REQUEST_TIMEOUT_MS = cohereKeyType === 'production' ? 60000 : 90000;
 
-        // ========== STEP 3: PARALLEL PER-EMAIL AI SUMMARIZATION ==========
-        const model = new ChatCohere({
+        const plannerModel = new ChatCohere({
             model: 'command-r-08-2024',
             apiKey: apiKey,
-            temperature: 0,
+            temperature: 0.2,
+        });
+        const writerModel = new ChatCohere({
+            model: 'command-r-08-2024',
+            apiKey: apiKey,
+            temperature: 0.3,
         });
 
-        // Concurrency limiter: Process emails with controlled parallelism
-        // Too many parallel requests can cause some to hang/timeout
-        // 5 concurrent requests is a good balance between speed and reliability
-        const limit = pLimit(5);
+        sendProgress('topics', 'Identifying topics across your emails...', 0, 1);
 
-        // Progress Tracking
-        let processedCount = 0;
-        const totalEmails = emails.length;
+        const emailList = emails.map((e, i) =>
+            `[${i}] SUBJECT: ${e.subject}\n    FROM: ${e.from}\n    PREVIEW: ${e.body.substring(0, 700).replace(/\n+/g, ' ')}`
+        ).join('\n\n');
 
-        const perEmailSystemPrompt = `You are a PROFESSIONAL executive briefing assistant. 
-Your goal is to summarize the provided email into structured JSON.
+        const topicPlan = await invokeStructured(
+            plannerModel,
+            TOPIC_PLAN_SYSTEM,
+            `Here are today's ${emails.length} emails:\n\n${emailList}\n\nGroup them into topics. Output ONLY the JSON object.`,
+            TopicPlanSchema,
+            { timeoutMs: REQUEST_TIMEOUT_MS, maxRetries: 3, label: 'topic-plan' }
+        );
 
-CRITICAL GUIDELINES:
-- Be PROFESSIONAL and SERIOUS. No humor, jokes, or casual language.
-- Present information in CLEAR, ORGANIZED bullet points.
-- Be CONCISE but COMPLETE.
-- Structure is paramount.
+        // Sanitize: clamp indexes, drop empty topics, assign orphan emails
+        const seen = new Set<number>();
+        const topics = topicPlan.topics
+            .map(t => ({
+                ...t,
+                email_indexes: t.email_indexes.filter(i =>
+                    Number.isInteger(i) && i >= 0 && i < emails.length && !seen.has(i) && (seen.add(i), true)
+                ),
+            }))
+            .filter(t => t.email_indexes.length > 0);
 
-JSON SCHEMA:
-{
-  "category": "Tech" | "Markets" | "AI" | "World" | "Business" | "Science" | "Politics" | "General",
-  "icon": "Single emoji representing the category",
-  "headline": "Professional one-line headline summarizing the core topic",
-  "bullet_points": ["Key insight 1", "Key insight 2", "Key insight 3"],
-  "detailed_points": [
-    {"text": "Full organized point 1", "isSponsored": false},
-    {"text": "Full organized point 2", "isSponsored": false},
-    {"text": "This is a sponsored/ad section", "isSponsored": true},
-    ...up to 10 points
-  ],
-  "sentiment": "Neutral" | "Good" | "Bad"
-}
-
-INSTRUCTIONS:
-1. Extract ALL key information into detailed_points (comprehensive, organized).
-2. For EACH detailed_point, set isSponsored: true ONLY if that specific point is promotional/advertising content.
-3. Summarize the most important 3-5 NON-SPONSORED items into bullet_points.
-4. RETURN ONLY VALID JSON. No markdown, no extra text.
-`;
-
-        // Retry configuration
-        const MAX_RETRIES = 3;
-        const BASE_DELAY_MS = 2000; // 2 seconds base delay
-
-        // Dynamic timeout based on API key type
-        // Trial keys have slower response times due to rate limiting, need longer timeout
-        // Production keys are faster and more reliable
-        const cohereKeyType = store.get('cohereKeyType') || 'trial';
-        const REQUEST_TIMEOUT_MS = cohereKeyType === 'production' ? 60000 : 90000; // 60s for production, 90s for trial
-        console.log(`[AI] Using ${cohereKeyType} timeout: ${REQUEST_TIMEOUT_MS / 1000}s`);
-
-        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-        // Timeout wrapper for API calls
-        const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> => {
-            return Promise.race([
-                promise,
-                new Promise<T>((_, reject) =>
-                    setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
-                )
-            ]);
-        };
-
-        const normalizeBlock = (block: any): any => ({
-            category: block.category || 'General',
-            icon: block.icon || '💡',
-            headline: block.headline || block.title || 'Update',
-            bullet_points: Array.isArray(block.bullet_points) ? block.bullet_points : ['Details unavailable'],
-            detailed_points: Array.isArray(block.detailed_points) ? block.detailed_points : [],
-            sentiment: block.sentiment || 'Neutral',
-            isSponsored: block.isSponsored === true,
-            sourceEmailSubject: block.sourceEmailSubject || '',
-            senderName: block.senderName || '',
-            senderEmail: block.senderEmail || ''
-        });
-
-        const summarizeEmail = async (email: EmailData, emailIndex: number): Promise<any> => {
-            const userPrompt = `EMAIL SUBJECT: ${email.subject}\nFROM: ${email.from}\n\nCONTENT:\n${email.body}`;
-
-            console.log(`\n${'='.repeat(60)}`);
-            console.log(`[AI] START Processing Email ${emailIndex + 1}/${totalEmails}`);
-            console.log(`[AI] Subject: "${email.subject}"`);
-            console.log(`[AI] From: ${email.from}`);
-            console.log(`[AI] Body Length: ${email.body.length} characters`);
-            console.log(`[AI] Body Preview: "${email.body.substring(0, 150).replace(/\n/g, ' ')}..."`);
-
-            // Retry loop
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                const attemptLabel = attempt > 1 ? ` (Retry ${attempt}/${MAX_RETRIES})` : '';
-                console.log(`[AI] Sending request to Cohere API...${attemptLabel}`);
-
-                // On retry, log first 200 chars to help debug problematic content
-                if (attempt > 1) {
-                    const contentPreview = email.body.substring(0, 200).replace(/\n/g, ' ').trim();
-                    console.log(`[AI] Content preview (first 200 chars): "${contentPreview}..."`);
-                }
-
-                const startTime = Date.now();
-
-                try {
-                    // Wrap the API call with a timeout
-                    const response = await withTimeout(
-                        model.invoke([
-                            new SystemMessage(perEmailSystemPrompt),
-                            new HumanMessage(userPrompt),
-                        ]),
-                        REQUEST_TIMEOUT_MS,
-                        `Request timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
-                    );
-
-                    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-                    console.log(`[AI] Response received in ${duration}s`);
-
-                    // Update progress
-                    processedCount++;
-                    const percent = Math.round((processedCount / totalEmails) * 100);
-
-                    // Emit progress event to renderer
-                    mainWindow?.webContents.send('briefing-progress', {
-                        current: processedCount,
-                        total: totalEmails,
-                        percent: percent
-                    });
-
-                    let cleanJson = response.content.toString();
-                    console.log(`[AI] Raw response length: ${cleanJson.length} chars`);
-
-                    cleanJson = cleanJson.replace(/```json/g, '').replace(/```/g, '').trim();
-                    const parsed = JSON.parse(cleanJson);
-
-                    console.log(`[AI] SUCCESS - Category: ${parsed.category}, Headline: "${parsed.headline?.substring(0, 50)}..."`);
-                    console.log(`[AI] END Email ${emailIndex + 1}/${totalEmails} - ${duration}s`);
-                    console.log(`${'='.repeat(60)}\n`);
-
-                    // Add source email info and sender
-                    parsed.sourceEmailSubject = email.subject;
-
-                    // Parse sender name and email from "Name <email@example.com>" format
-                    const senderMatch = email.from.match(/^(.+?)\s*<(.+?)>$/);
-                    if (senderMatch) {
-                        parsed.senderName = senderMatch[1].replace(/"/g, '').trim();
-                        parsed.senderEmail = senderMatch[2].trim();
-                    } else {
-                        parsed.senderName = email.from;
-                        parsed.senderEmail = email.from;
-                    }
-
-                    // ========== STREAMING CHANGE: Emit card immediately ==========
-                    const normalized = normalizeBlock(parsed);
-                    mainWindow?.webContents.send('briefing-card-generated', normalized);
-                    // ==========================================================
-
-                    return normalized;
-
-                } catch (error: any) {
-                    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-                    const errorMessage = error?.message || String(error);
-                    const errorLower = errorMessage.toLowerCase();
-                    const httpStatus = error?.response?.status;
-
-                    // Determine if error is retryable
-                    const isRateLimited = httpStatus === 429 || errorMessage.includes('429') || errorLower.includes('rate limit');
-                    const isServerError = httpStatus >= 500 && httpStatus < 600;
-                    // Check for various timeout patterns: "timeout", "timed out", "ETIMEDOUT"
-                    const isTimeout = errorLower.includes('timeout') || errorLower.includes('timed out') || errorMessage.includes('ETIMEDOUT');
-                    const isRetryable = isRateLimited || isServerError || isTimeout;
-
-                    console.log(`[AI] FAILED after ${duration}s (Attempt ${attempt}/${MAX_RETRIES})`);
-                    console.log(`[AI] Error Type: ${error?.constructor?.name || 'Unknown'}`);
-                    console.log(`[AI] Error Message: ${errorMessage}`);
-                    console.log(`[AI] Is Retryable: ${isRetryable} (RateLimit: ${isRateLimited}, ServerError: ${isServerError}, Timeout: ${isTimeout})`);
-                    if (httpStatus) {
-                        console.log(`[AI] HTTP Status: ${httpStatus}`);
-                    }
-                    if (error?.response?.data) {
-                        console.log(`[AI] Response Data: ${JSON.stringify(error.response.data).substring(0, 300)}`);
-                    }
-
-                    // Retry if retryable and not last attempt
-                    if (isRetryable && attempt < MAX_RETRIES) {
-                        const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1); // Exponential backoff: 2s, 4s, 8s
-                        const jitter = Math.random() * 1000; // Add 0-1s jitter
-                        const totalDelay = Math.round(delayMs + jitter);
-                        console.log(`[AI] Retrying in ${totalDelay}ms... (${isRateLimited ? 'Rate Limited' : isServerError ? 'Server Error' : 'Timeout'})`);
-                        await sleep(totalDelay);
-                        continue; // Retry
-                    }
-
-                    // Final failure - no more retries
-                    const reason = attempt >= MAX_RETRIES ? 'max retries reached' : 'non-retryable error';
-                    console.log(`[AI] END Email ${emailIndex + 1}/${totalEmails} - FAILED (${reason})`);
-                    console.log(`${'='.repeat(60)}\n`);
-
-                    // Update progress even on failure
-                    processedCount++;
-                    mainWindow?.webContents.send('briefing-progress', {
-                        current: processedCount,
-                        total: totalEmails,
-                        percent: Math.round((processedCount / totalEmails) * 100)
-                    });
-
-                    const errorBlock = {
-                        category: 'General',
-                        icon: '📧',
-                        headline: email.subject,
-                        bullet_points: ['Could not summarize this email.'],
-                        detailed_points: [`Error after ${MAX_RETRIES} attempts: ${errorMessage}`],
-                        sentiment: 'Neutral',
-                        isSponsored: false,
-                        sourceEmailSubject: email.subject,
-                        senderName: email.from,
-                        senderEmail: email.from
-                    };
-
-                    const normalized = normalizeBlock(errorBlock);
-                    mainWindow?.webContents.send('briefing-card-generated', normalized);
-
-                    return normalized;
-                }
-            }
-
-            // Should never reach here, but TypeScript needs it
-            const fallback = normalizeBlock({
+        const orphans = emails.map((_, i) => i).filter(i => !seen.has(i));
+        for (const idx of orphans) {
+            topics.push({
+                title: emails[idx].subject.substring(0, 60),
                 category: 'General',
                 icon: '📧',
-                headline: email.subject,
-                bullet_points: ['Processing error.'],
-                detailed_points: [],
-                sentiment: 'Neutral',
-                isSponsored: false,
-                sourceEmailSubject: email.subject
+                email_indexes: [idx],
+                search_queries: [emails[idx].subject.substring(0, 80)],
+                image_query: emails[idx].subject.split(/\s+/).slice(0, 4).join(' '),
             });
-            mainWindow?.webContents.send('briefing-card-generated', fallback);
-            return fallback;
+        }
+
+        console.log(`[Pipeline] ${emails.length} emails -> ${topics.length} topics: ${topics.map(t => t.title).join(' | ')}`);
+
+        // ========== STEP 4: PER-TOPIC DASHBOARDS (search + generate) ==========
+        const totalTopics = topics.length;
+        let completedTopics = 0;
+        sendProgress('dashboards', `Building ${totalTopics} dashboards...`, 0, totalTopics);
+
+        const limit = pLimit(2); // topic-level concurrency (each does searches + 1 LLM call)
+
+        const buildDashboard = async (topic: typeof topics[number], topicIndex: number): Promise<TopicDashboard | null> => {
+            const template = TEMPLATE_SPECS[Math.floor(Math.random() * TEMPLATE_SPECS.length)];
+            console.log(`[Topic ${topicIndex + 1}/${totalTopics}] "${topic.title}" — template: ${template.name}`);
+
+            // --- Gather web context (all free, all failure-tolerant) ---
+            const searchQueries = topic.search_queries.slice(0, 2);
+            const [ddgResults, wikiResult, openverseImages] = await Promise.all([
+                Promise.all(searchQueries.map(q => searchDuckDuckGo(q, 4))).then(r => r.flat()),
+                searchWikipedia(topic.search_queries[0] || topic.title),
+                searchOpenverseImages(topic.image_query || topic.title, 3),
+            ]);
+
+            const sources: SearchSource[] = [];
+            const seenUrls = new Set<string>();
+            for (const s of [...(wikiResult.source ? [wikiResult.source] : []), ...ddgResults]) {
+                if (seenUrls.has(s.url)) continue;
+                seenUrls.add(s.url);
+                sources.push(s);
+                if (sources.length >= 8) break;
+            }
+
+            const images: DashboardImage[] = [];
+            if (wikiResult.image) images.push(wikiResult.image);
+            images.push(...openverseImages);
+
+            // --- Compose generation prompt ---
+            const topicEmails = topic.email_indexes.map(i => emails[i]);
+            const perEmailBudget = Math.max(3000, Math.floor(16000 / topicEmails.length));
+            const emailSection = topicEmails.map((e, i) =>
+                `### EMAIL ${i + 1}\nSUBJECT: ${e.subject}\nFROM: ${e.from}\nCONTENT:\n${truncateAtBoundary(e.body, perEmailBudget)}`
+            ).join('\n\n');
+
+            const searchSection = sources.length > 0
+                ? sources.map((s, i) => `[${i + 1}] ${s.title}\n    ${s.snippet}`).join('\n\n')
+                : '(no web results available — build the dashboard from the emails alone and omit web_context)';
+
+            const userPrompt = `TOPIC: ${topic.title}
+
+## Emails
+${emailSection}
+
+## Web Search Results
+${searchSection}
+
+Build the "${template.name}" dashboard for this topic now. Output ONLY the JSON object.`;
+
+            try {
+                const content = await invokeStructured(
+                    writerModel,
+                    buildDashboardSystemPrompt(template),
+                    userPrompt,
+                    DashboardContentSchema,
+                    { timeoutMs: REQUEST_TIMEOUT_MS, maxRetries: 3, label: `dashboard:${topic.title.substring(0, 25)}` }
+                );
+
+                const dashboard: TopicDashboard = {
+                    id: crypto.randomUUID(),
+                    topic: topic.title,
+                    category: topic.category,
+                    icon: topic.icon,
+                    template: template.id,
+                    content,
+                    sources,
+                    images,
+                    emails: topicEmails.map(e => e.ref),
+                    generatedAt: new Date().toISOString(),
+                };
+
+                completedTopics++;
+                sendProgress('dashboards', `Built "${topic.title}"`, completedTopics, totalTopics);
+                mainWindow?.webContents.send('dashboard-generated', dashboard);
+                return dashboard;
+            } catch (error: any) {
+                console.error(`[Topic] Dashboard failed for "${topic.title}": ${error?.message}`);
+                completedTopics++;
+                sendProgress('dashboards', `Skipped "${topic.title}" (generation failed)`, completedTopics, totalTopics);
+
+                // Degraded fallback so the topic still appears
+                const fallback: TopicDashboard = {
+                    id: crypto.randomUUID(),
+                    topic: topic.title,
+                    category: topic.category,
+                    icon: topic.icon,
+                    template: 'pulse',
+                    content: {
+                        headline: topic.title,
+                        overview: `We couldn't generate the full dashboard for this topic (${(error?.message || 'unknown error').substring(0, 120)}). The source emails are listed below.`,
+                        sentiment: 'Neutral',
+                        stats: [],
+                        key_points: topicEmails.map(e => ({ text: `Email: ${e.subject}` })),
+                        timeline: [], quotes: [], action_items: [], glossary: [], web_context: [],
+                    },
+                    sources,
+                    images,
+                    emails: topicEmails.map(e => e.ref),
+                    generatedAt: new Date().toISOString(),
+                };
+                mainWindow?.webContents.send('dashboard-generated', fallback);
+                return fallback;
+            }
         };
 
         const start = Date.now();
-        console.log(`\n${'#'.repeat(60)}`);
-        console.log(`[Pipeline] Starting AI summarization for ${totalEmails} emails`);
-        console.log(`[Pipeline] Concurrency: 5 parallel requests (balanced for reliability)`);
-        console.log(`${'#'.repeat(60)}\n`);
+        const dashboards = (await Promise.all(
+            topics.map((t, i) => limit(() => buildDashboard(t, i)))
+        )).filter((d): d is TopicDashboard => d !== null);
 
-        // Process all emails in parallel with concurrency limit
-        const summaryPromises = emails.map((email, index) => limit(() => summarizeEmail(email, index)));
-        const summaryBlocks = await Promise.all(summaryPromises);
+        console.log(`[Pipeline] Built ${dashboards.length} dashboards in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 
-        console.log(`[AI] Completed ${summaryBlocks.length} summaries in ${(Date.now() - start) / 1000}s`);
-
-        // Blocks are already normalized in summarizeEmail
-        const normalizedBlocks = summaryBlocks;
-
-        const briefingData: Briefing = {
-            title: `Daily Briefing - ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,
-            summary_blocks: normalizedBlocks
+        const briefing: DashboardBriefing = {
+            title: `Briefing — ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}`,
+            dashboards,
         };
-
-        console.log(`[Pipeline] Final block count: ${briefingData.summary_blocks.length}`);
 
         // Save to history (max 10 entries)
         const history = store.get('briefingHistory') || [];
         history.unshift({
             date: new Date().toISOString(),
-            briefing: briefingData,
-            emailCount: emails.length
+            title: briefing.title,
+            emailCount: emails.length,
+            dashboards,
         });
-        if (history.length > 10) {
-            history.pop();
-        }
+        if (history.length > 10) history.length = 10;
         store.set('briefingHistory', history);
-        console.log(`[History] Saved briefing. Total history entries: ${history.length}`);
 
         return {
             success: true,
-            data: briefingData,
+            data: briefing,
             emailCount: emails.length,
         };
 
     } catch (error: any) {
         console.error('Briefing pipeline error:', error);
 
-        // Detailed error logging
         if (error.response) {
             console.error('API Error Status:', error.response.status);
-            console.error('API Error Body:', JSON.stringify(error.response.data, null, 2));
+            console.error('API Error Body:', JSON.stringify(error.response.data || {}, null, 2).substring(0, 500));
         }
 
         const errorMessage = error.message || String(error);
 
-        // Handle expired/invalid Google tokens
         if (errorMessage.includes('invalid_grant') || errorMessage.includes('401')) {
             console.log('[Auth] Detected invalid_grant/401. Clearing tokens.');
             store.delete('googleTokens');

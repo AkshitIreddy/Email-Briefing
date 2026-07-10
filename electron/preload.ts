@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // Secure IPC bridge - exposes only specific APIs to renderer
 contextBridge.exposeInMainWorld('briefingAPI', {
-    // Fetch and summarize emails
+    // Fetch and build the dashboard briefing
     fetchBriefing: () => ipcRenderer.invoke('fetch-briefing'),
 
     // Google OAuth
@@ -18,9 +18,9 @@ contextBridge.exposeInMainWorld('briefingAPI', {
     getHistory: () => ipcRenderer.invoke('get-history'),
     clearHistory: () => ipcRenderer.invoke('clear-history'),
 
-    // Accessibility Settings
+    // Appearance / reader settings
     getSettings: () => ipcRenderer.invoke('get-settings'),
-    setSettings: (settings: { accentColor: string; fontSize: number; animationsEnabled: boolean }) =>
+    setSettings: (settings: Record<string, unknown>) =>
         ipcRenderer.invoke('set-settings', settings),
 
     // Cohere API Key Type (trial vs production)
@@ -31,17 +31,16 @@ contextBridge.exposeInMainWorld('briefingAPI', {
     openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
 
     // Progress Listener
-    onProgress: (callback: (data: { current: number; total: number; percent: number }) => void) => {
+    onProgress: (callback: (data: { stage: string; message: string; current: number; total: number; percent: number }) => void) => {
         const subscription = (_: any, data: any) => callback(data);
         ipcRenderer.on('briefing-progress', subscription);
-        // Return unsubscribe function
         return () => ipcRenderer.removeListener('briefing-progress', subscription);
     },
 
-    // Card Generated Listener
-    onCardGenerated: (callback: (card: any) => void) => {
-        const subscription = (_: any, card: any) => callback(card);
-        ipcRenderer.on('briefing-card-generated', subscription);
-        return () => ipcRenderer.removeListener('briefing-card-generated', subscription);
+    // Dashboard streaming listener
+    onDashboardGenerated: (callback: (dashboard: any) => void) => {
+        const subscription = (_: any, dashboard: any) => callback(dashboard);
+        ipcRenderer.on('dashboard-generated', subscription);
+        return () => ipcRenderer.removeListener('dashboard-generated', subscription);
     }
 });
