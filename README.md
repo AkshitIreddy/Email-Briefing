@@ -4,7 +4,9 @@ Email Briefing is a desktop application that turns your Gmail inbox into **rich 
 
 Powered by **Electron**, **React**, **LangChain**, and **Cohere Command R**, it reads your newsletters, extracts every distinct story, deduplicates them into topics, enriches each with free web search and images, and renders them as long-form dashboards you can actually enjoy reading.
 
-![Email Briefing UI](public/icon.png)
+<p align="center">
+  <img src="docs/demo.gif" alt="Email Briefing — inbox distilled into topic dashboards" width="100%">
+</p>
 
 ## ✨ Features
 
