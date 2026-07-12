@@ -9,7 +9,8 @@
     "build": "npm run build:electron && vite build",
     "preview": "vite preview",
     "start": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "demo:gif": "node scripts/record-demo.mjs"
   },
   "build": {
     "appId": "com.emailbriefing.app",
@@ -55,6 +56,7 @@
     "concurrently": "^8.2.2",
     "electron": "^28.2.5",
     "electron-builder": "^26.7.0",
+    "puppeteer-core": "^24.43.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "typescript": "^5.4.2",

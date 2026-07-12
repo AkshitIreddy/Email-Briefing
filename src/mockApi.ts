@@ -1,5 +1,10 @@
 import { BriefingAPI, DashboardBriefing, TopicDashboard, DEFAULT_SETTINGS } from './types';
 
+// Optional pacing multiplier for the demo recorder (scripts/record-demo.mjs).
+// Set window.__DEMO_PACE__ = 1.6 to slow the mock streaming for a smooth GIF.
+// Defaults to 1 (normal) in the app.
+const PACE = (): number => (typeof window !== 'undefined' && (window as any).__DEMO_PACE__) || 1;
+
 const mockDashboard = (i: number): TopicDashboard => ({
     id: `mock-${i}`,
     topic: ['AI Model Releases', 'Crypto Market Rally', 'SpaceX Starship Update'][i % 3],
@@ -59,7 +64,7 @@ const mockDashboard = (i: number): TopicDashboard => ({
 export const mockBriefingAPI: BriefingAPI = {
     fetchBriefing: async () => {
         console.log('[MOCK] Fetching briefing...');
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        await new Promise(resolve => setTimeout(resolve, 2500 * PACE()));
         const data: DashboardBriefing = {
             title: 'Briefing — Mock Edition',
             dashboards: [0, 1, 2, 3, 4].map(mockDashboard),
@@ -124,7 +129,7 @@ export const mockBriefingAPI: BriefingAPI = {
                 percent: Math.round((count / total) * 100),
             });
             if (count >= total) clearInterval(interval);
-        }, 500);
+        }, 500 * PACE());
         return () => clearInterval(interval);
     },
 
@@ -134,7 +139,7 @@ export const mockBriefingAPI: BriefingAPI = {
             if (count >= 5) { clearInterval(interval); return; }
             callback(mockDashboard(count));
             count++;
-        }, 450);
+        }, 450 * PACE());
         return () => clearInterval(interval);
     },
 
@@ -146,7 +151,7 @@ export const mockBriefingAPI: BriefingAPI = {
             { text: 'A fourth tidbit to test the expand button.', emoji: '🌸' },
             { text: 'Fifth tidbit hidden until expanded.', emoji: '🦋' },
             { text: 'Sixth tidbit also hidden until expanded.', emoji: '🍀' },
-        ]), 600);
+        ]), 600 * PACE());
         return () => clearTimeout(timer);
     },
 
@@ -158,7 +163,7 @@ export const mockBriefingAPI: BriefingAPI = {
                 senderEmail: 'newsletter@technologyreview.com',
                 body: 'This is the full cleaned text of the mock email.\n\nIt has multiple paragraphs so the in-app email viewer can be tested properly.\n\nBest,\nThe Mock Newsletter Team',
             },
-        }), 400);
+        }), 400 * PACE());
         return () => clearTimeout(timer);
     }
 };

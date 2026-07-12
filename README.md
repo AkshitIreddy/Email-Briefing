@@ -89,7 +89,13 @@ npm start
 
 # 4. Build Installer
 npm run dist
+
+# 5. Re-record the README demo GIF (needs ffmpeg + a Chromium browser)
+npm run dev          # in one terminal
+npm run demo:gif     # in another → writes docs/demo.gif
 ```
+
+See [`scripts/README.md`](scripts/README.md) for how the demo GIF is recorded.
 
 ## 🔒 Privacy
 Email Briefing runs **locally** on your machine.
