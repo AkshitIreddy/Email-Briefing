@@ -218,6 +218,12 @@ body {
   padding: var(--space-md) 0;
   margin-bottom: var(--space-md);
   -webkit-app-region: drag;
+  /* Reserve the strip Windows/Linux use for the OS caption buttons, which are
+     drawn ON TOP of the page by titleBarOverlay — otherwise the nav pills sit
+     underneath them and become unclickable. Resolves to 0 in a plain browser
+     and in fullscreen (where the overlay is hidden), so nothing else shifts. */
+  padding-right: max(var(--wco-inset-right, 0px),
+      calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
 }
 
 .header button {

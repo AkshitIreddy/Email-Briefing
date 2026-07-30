@@ -291,6 +291,26 @@ function App() {
         checkStatus();
     }, []);
 
+    // Keep the header clear of the OS caption buttons (minimize/maximize/close),
+    // which the window's titleBarOverlay draws on top of the page. The rect
+    // changes on maximize/restore/fullscreen, so track it live.
+    useEffect(() => {
+        const wco = (navigator as any).windowControlsOverlay;
+        if (!wco) return;
+        const apply = () => {
+            const r = wco.visible ? wco.getTitlebarAreaRect() : null;
+            const inset = r ? Math.max(0, window.innerWidth - (r.x + r.width)) : 0;
+            document.documentElement.style.setProperty('--wco-inset-right', `${inset}px`);
+        };
+        apply();
+        wco.addEventListener('geometrychange', apply);
+        window.addEventListener('resize', apply);
+        return () => {
+            wco.removeEventListener('geometrychange', apply);
+            window.removeEventListener('resize', apply);
+        };
+    }, []);
+
     // Elapsed-time ticker so long stages visibly aren't frozen
     useEffect(() => {
         if (screen !== 'loading') return;

@@ -126,22 +126,32 @@ let currentRedirectUri: string = 'http://localhost:3000/oauth2callback';
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
+    // 'hiddenInset' is macOS-only. On Windows/Linux the custom title bar needs
+    // 'hidden' — passing 'hiddenInset' there left the window without proper
+    // maximize/fullscreen window styles (both appeared greyed out).
+    const isMac = process.platform === 'darwin';
+
     mainWindow = new BrowserWindow({
         title: 'Email Briefing',
         width: 1280,
         height: 840,
         minWidth: 940,
         minHeight: 620,
+        resizable: true,
         maximizable: true,
+        fullscreenable: true,
         // Windows 11 Mica effect
         backgroundMaterial: 'mica',
         backgroundColor: '#00000000',
-        titleBarStyle: 'hiddenInset',
-        titleBarOverlay: {
-            color: '#1a1a2e00',
-            symbolColor: '#ffffff',
-            height: 40,
-        },
+        titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+        // titleBarOverlay draws the OS caption buttons; Windows/Linux only
+        ...(isMac ? {} : {
+            titleBarOverlay: {
+                color: '#1a1a2e00',
+                symbolColor: '#ffffff',
+                height: 40,
+            },
+        }),
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -152,6 +162,20 @@ function createWindow() {
     });
 
     mainWindow.setMenuBarVisibility(false);
+
+    // The menu bar is hidden, so bind F11 (and Alt+Enter) ourselves rather than
+    // relying on the default menu's accelerator.
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        if (input.type !== 'keyDown' || !mainWindow) return;
+        const isF11 = input.key === 'F11';
+        const isAltEnter = input.alt && input.key === 'Enter';
+        if (isF11 || isAltEnter) {
+            mainWindow.setFullScreen(!mainWindow.isFullScreen());
+            event.preventDefault();
+        }
+    });
+
+    console.log(`[Window] resizable=${mainWindow.isResizable()} maximizable=${mainWindow.isMaximizable()} fullscreenable=${mainWindow.isFullScreenable()}`);
 
     if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
         mainWindow.loadURL('http://localhost:5173');
