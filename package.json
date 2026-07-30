@@ -9,7 +9,7 @@
     "build": "npm run build:electron && vite build",
     "preview": "vite preview",
     "start": "npm run build:electron && concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "dist": "npm run build && electron-builder",
+    "dist": "npm run build && electron-builder --publish never",
     "demo:gif": "node scripts/record-demo.mjs"
   },
   "build": {

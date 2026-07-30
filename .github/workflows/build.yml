@@ -24,20 +24,29 @@ jobs:
       - name: Install Dependencies
         run: npm ci --legacy-peer-deps
 
+      # No GH_TOKEN here on purpose: electron-builder would auto-publish its own
+      # draft release alongside the real one below. Publishing is handled solely
+      # by the release step.
       - name: Build and Distribute
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist
 
-      - name: Extract release notes from tag annotation
+      - name: Resolve release notes
         id: tag_notes
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           git fetch --force --tags origin
+          # Prefer a committed notes file — git strips lines starting with '#'
+          # from tag annotations, which silently eats markdown headings.
+          NOTES_FILE="docs/release-notes/${GITHUB_REF_NAME}.md"
           {
             echo "message<<NOTES_EOF"
-            git tag -l --format='%(contents)' "${GITHUB_REF_NAME}"
+            if [ -f "$NOTES_FILE" ]; then
+              echo "Using $NOTES_FILE" >&2
+              cat "$NOTES_FILE"
+            else
+              git tag -l --format='%(contents)' "${GITHUB_REF_NAME}"
+            fi
             echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
