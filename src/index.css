@@ -291,8 +291,20 @@ body {
   flex-direction: column;
   align-items: center;
   overflow-y: auto;
+  /* Reserve the scrollbar gutter on BOTH sides, otherwise the scrollbar that
+     appears on long screens shifts centred content a few px to the left. */
+  scrollbar-gutter: stable both-edges;
   padding-bottom: var(--space-xl);
   animation: fadeSlideIn 0.35s ease-out;
+}
+
+/* Screens that centre themselves do so inside the region below the header,
+   which sits lower than the true window centre. --center-shift (measured at
+   runtime) pulls them back onto the window's optical centre. */
+.idle-screen,
+.loading-screen,
+.error-screen {
+  transform: translateY(var(--center-shift, 0px));
 }
 
 @keyframes fadeSlideIn {

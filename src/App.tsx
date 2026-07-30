@@ -301,6 +301,9 @@ function App() {
         const apply = () => {
             const height = wco.visible ? wco.getTitlebarAreaRect().height : 0;
             document.documentElement.style.setProperty('--wco-inset-top', `${height}px`);
+            // The strip changes how much vertical room the content region has,
+            // so the centring measurement has to be redone.
+            window.dispatchEvent(new Event('app:relayout'));
         };
         apply();
         wco.addEventListener('geometrychange', apply);
@@ -310,6 +313,40 @@ function App() {
             window.removeEventListener('resize', apply);
         };
     }, []);
+
+    // The header pushes the content region below the window's true centre, so
+    // screens that centre themselves (idle/loading/error) end up sitting low.
+    // Measure the offset and expose it as --center-shift. Recomputed on resize
+    // and whenever the header's height changes (e.g. the font-size setting).
+    useEffect(() => {
+        const el = document.querySelector('.idle-screen, .loading-screen, .error-screen') as HTMLElement | null;
+        if (!el) return;
+        const root = document.documentElement;
+        const apply = () => {
+            // Measure where the box actually lands (transform included) and
+            // correct by the remaining error — exact regardless of the
+            // surrounding padding/margin maths.
+            const current = parseFloat(getComputedStyle(root).getPropertyValue('--center-shift')) || 0;
+            const r = el.getBoundingClientRect();
+            const delta = window.innerHeight / 2 - (r.top + r.height / 2);
+            if (Math.abs(delta) < 1) return;
+            root.style.setProperty('--center-shift', `${Math.round(current + delta)}px`);
+        };
+        // Two passes: the first lands the box, the second settles any residual
+        // error once fonts/layout have finished.
+        apply();
+        requestAnimationFrame(() => { apply(); requestAnimationFrame(apply); });
+        const ro = new ResizeObserver(apply);
+        ro.observe(el);
+        ro.observe(document.querySelector('.main-content') as HTMLElement);
+        window.addEventListener('resize', apply);
+        window.addEventListener('app:relayout', apply);
+        return () => {
+            ro.disconnect();
+            window.removeEventListener('resize', apply);
+            window.removeEventListener('app:relayout', apply);
+        };
+    }, [screen]);
 
     // Elapsed-time ticker so long stages visibly aren't frozen
     useEffect(() => {
