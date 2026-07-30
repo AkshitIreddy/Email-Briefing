@@ -1,6 +1,6 @@
 {
   "name": "email-briefing",
-  "version": "1.1.15",
+  "version": "1.1.16",
   "description": "Email Briefing - AI-powered email newsletter summarizer",
   "main": "dist-electron/main.js",
   "scripts": {

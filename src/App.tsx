@@ -291,16 +291,16 @@ function App() {
         checkStatus();
     }, []);
 
-    // Keep the header clear of the OS caption buttons (minimize/maximize/close),
-    // which the window's titleBarOverlay draws on top of the page. The rect
-    // changes on maximize/restore/fullscreen, so track it live.
+    // Reserve the title-bar strip that the OS caption buttons
+    // (minimize/maximize/close) are drawn into, so the header sits below them
+    // and stays flush right. The overlay disappears in fullscreen, so track it
+    // live and reclaim the space when it does.
     useEffect(() => {
         const wco = (navigator as any).windowControlsOverlay;
         if (!wco) return;
         const apply = () => {
-            const r = wco.visible ? wco.getTitlebarAreaRect() : null;
-            const inset = r ? Math.max(0, window.innerWidth - (r.x + r.width)) : 0;
-            document.documentElement.style.setProperty('--wco-inset-right', `${inset}px`);
+            const height = wco.visible ? wco.getTitlebarAreaRect().height : 0;
+            document.documentElement.style.setProperty('--wco-inset-top', `${height}px`);
         };
         apply();
         wco.addEventListener('geometrychange', apply);
@@ -539,6 +539,8 @@ function App() {
 
     return (
         <div className="app-container">
+            {/* Drag area behind the OS caption buttons */}
+            <div className="titlebar-drag" aria-hidden="true" />
             <div className="aurora" aria-hidden="true">
                 <div className="aurora-blob a1" /><div className="aurora-blob a2" /><div className="aurora-blob a3" />
             </div>
